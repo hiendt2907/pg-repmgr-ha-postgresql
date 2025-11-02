@@ -9,10 +9,18 @@ pkill -9 pgpool 2>/dev/null || true
 pkill -9 -f "pgpool" 2>/dev/null || true
 killall -9 pgpool 2>/dev/null || true
 
+# Ensure directories exist before cleanup
+mkdir -p /var/run/pgpool /run/pgpool /tmp
+chown -R postgres:postgres /var/run/pgpool /run/pgpool
+
+# Remove all PID files from all possible locations
 rm -f /var/run/pgpool/pgpool.pid
 rm -f /var/run/pgpool/*.pid
 rm -f /run/pgpool/pgpool.pid
+rm -f /run/pgpool/*.pid
 rm -f /tmp/pgpool*.pid
+rm -f /var/run/pgpool.pid
+rm -f /run/pgpool.pid
 
 sleep 3
 
@@ -469,14 +477,16 @@ echo "[$(date)] Cleaning up stale pgpool processes and pid files..."
 pkill -9 pgpool || true
 pkill -9 -f "pgpool" || true
 
-# Remove all possible pid files
+# Remove all possible pid files from ALL locations
 rm -f /var/run/pgpool/pgpool.pid
 rm -f /var/run/pgpool/*.pid
+rm -f /var/run/pgpool.pid
 rm -f /tmp/pgpool*.pid
 rm -f /run/pgpool/pgpool.pid
+rm -f /run/pgpool/*.pid
 
 # Wait for processes to die
-sleep 5
+sleep 2
 
 # Double check no pgpool processes running
 if pgrep -f pgpool > /dev/null; then
@@ -485,12 +495,14 @@ if pgrep -f pgpool > /dev/null; then
   sleep 2
 fi
 
-# Aggressive cleanup of ALL possible PID file locations
+# Aggressive cleanup of ALL possible PID file locations (including subdirs)
 echo "[$(date)] Final PID file cleanup before start..."
-find /var/run/pgpool -name "*.pid" -delete 2>/dev/null || true
-find /run/pgpool -name "*.pid" -delete 2>/dev/null || true
+find /var/run -name "*pgpool*.pid" -delete 2>/dev/null || true
+find /run -name "*pgpool*.pid" -delete 2>/dev/null || true
 find /tmp -name "pgpool*.pid" -delete 2>/dev/null || true
-rm -f /var/run/pgpool.pid /run/pgpool.pid 2>/dev/null || true
+
+# Ensure clean slate
+rm -f /var/run/pgpool/pgpool.pid /var/run/pgpool.pid /run/pgpool/pgpool.pid /run/pgpool.pid 2>/dev/null || true
 
 # Start pgpool-II
 echo "[$(date)] Starting pgpool-II..."
