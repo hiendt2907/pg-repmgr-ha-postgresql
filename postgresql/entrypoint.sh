@@ -437,9 +437,10 @@ write_repmgr_conf
 # Accept PRIMARY_HOST if provided (compose may set PRIMARY_HOST)
 : "${PRIMARY_HOST:=}"
 if [ -n "${PRIMARY_HOST}" ]; then
-  # Strip port and domain to get just hostname (e.g., pg-1.railway.internal:5432 -> pg-1)
-  PRIMARY_HINT="${PRIMARY_HOST%%.*}"  # Remove .railway.internal or any domain
-  PRIMARY_HINT="${PRIMARY_HINT%:*}"   # Remove :port if present
+  # Strip port if present (e.g., pg-1.railway.internal:5432 -> pg-1.railway.internal)
+  PRIMARY_HINT="${PRIMARY_HOST%:*}"
+else
+  PRIMARY_HINT=""
 fi
 
 # Validate NODE_ID is numeric (required for repmgr priority calculation)
@@ -502,8 +503,8 @@ if ! pgdata_has_db; then
   if [ -n "$current_primary" ]; then
     clone_standby "$current_primary"
   else
-    # No primary found; if this node is the hinted bootstrap (PRIMARY_HINT), allow init as primary
-    if [ "$NODE_NAME" = "${PRIMARY_HINT%:*}" ]; then
+    # No primary found; if this node matches PRIMARY_HINT, allow init as primary
+    if [ "$NODE_NAME" = "$PRIMARY_HINT" ]; then
       log "No primary detected; ${NODE_NAME} matches PRIMARY_HINT → init as primary"
       init_primary
     else
