@@ -324,72 +324,27 @@ if [ -n "$PRIMARY_NODE" ]; then
 fi
 
 
-# Create pool_passwd in SCRAM-SHA-256 format using Python helper
-echo "[$(date)] Generating SCRAM-SHA-256 entries for pool_passwd..."
+# Create pool_passwd file with user credentials
+# For SCRAM-SHA-256, pgpool needs to query backend, so we use text format
+echo "[$(date)] Creating pool_passwd with text format for SCRAM-SHA-256..."
 
-# Default: do not export plaintext pool_passwd (safer). Keep EXPORT_PLAINTEXT_POOLPWD to allow compatibility when needed.
-if [ "${EXPORT_PLAINTEXT_POOLPWD:-false}" = "true" ]; then
-  echo "[$(date)] WARNING: EXPORT_PLAINTEXT_POOLPWD=true — plaintext pool_passwd will be written (not recommended)"
-fi
-
-generate_scram() {
-  local pw="$1"
-  # Use python3 to generate SCRAM string in PostgreSQL format:
-  # SCRAM-SHA-256$iterations:salt_b64:stored_key_b64:server_key_b64
-  # Pass the password as argv[1] to python - easier and avoids heredoc quoting issues
-  python3 - "$pw" <<'PY'
-import os,sys,base64,hmac,hashlib
-pw = sys.argv[1].encode('utf-8')
-iterations = 4096
-salt = os.urandom(16)
-salted = hashlib.pbkdf2_hmac('sha256', pw, salt, iterations)
-client_key = hmac.new(salted, b"Client Key", hashlib.sha256).digest()
-stored_key = hashlib.sha256(client_key).digest()
-server_key = hmac.new(salted, b"Server Key", hashlib.sha256).digest()
-print(f"SCRAM-SHA-256${iterations}:{base64.b64encode(salt).decode()}:{base64.b64encode(stored_key).decode()}:{base64.b64encode(server_key).decode()}")
-PY
-}
-
-  if [ "${EXPORT_PLAINTEXT_POOLPWD:-false}" = "true" ]; then
-  # Write plaintext pool_passwd into in-memory runtime dir (/run/pgpool). This directory
-  # should be mounted as tmpfs in production so plaintext never lands on host disk or image.
-  cat > /run/pgpool/pool_passwd <<EOF
-postgres:${POSTGRES_PASSWORD}
-repmgr:${REPMGR_PASSWORD}
-app_readonly:${APP_READONLY_PASSWORD}
-app_readwrite:${APP_READWRITE_PASSWORD}
-pgpool:${REPMGR_PASSWORD}
+# Create pool_passwd in text format (username:password)
+# Pgpool will handle SCRAM authentication with backends
+cat > /etc/pgpool-II/pool_passwd <<EOF
+postgres:$POSTGRES_PASSWORD
+repmgr:$REPMGR_PASSWORD
+app_readonly:$APP_READONLY_PASSWORD
+app_readwrite:$APP_READWRITE_PASSWORD
+pgpool:$REPMGR_PASSWORD
 EOF
-  chmod 600 /run/pgpool/pool_passwd
-  chown postgres:postgres /run/pgpool/pool_passwd
-  echo "[$(date)] pool_passwd (plaintext) created under /run/pgpool (tmpfs recommended)"
-  POOL_PASSWD_PATH="/run/pgpool/pool_passwd"
-else
-  # Build pool_passwd (SCRAM) for each user
-  TMP_POOL="/etc/pgpool-II/pool_passwd.tmp"
-  > "$TMP_POOL"
-  echo "postgres:$(generate_scram "$POSTGRES_PASSWORD")" >> "$TMP_POOL"
-  echo "repmgr:$(generate_scram "$REPMGR_PASSWORD")" >> "$TMP_POOL"
-  echo "app_readonly:$(generate_scram "$APP_READONLY_PASSWORD")" >> "$TMP_POOL"
-  echo "app_readwrite:$(generate_scram "$APP_READWRITE_PASSWORD")" >> "$TMP_POOL"
-  echo "pgpool:$(generate_scram "$REPMGR_PASSWORD")" >> "$TMP_POOL"
-  mv "$TMP_POOL" /etc/pgpool-II/pool_passwd
-  chmod 600 /etc/pgpool-II/pool_passwd
-  chown postgres:postgres /etc/pgpool-II/pool_passwd
-  echo "[$(date)] pool_passwd created with SCRAM-SHA-256 entries (pgpool frontend auth)"
-  POOL_PASSWD_PATH="/etc/pgpool-II/pool_passwd"
-fi
 
-# Do not generate plaintext or MD5 pool_passwd — SCRAM is enforced. If you need backwards compatibility,
-# set EXPORT_PLAINTEXT_POOLPWD=true explicitly (not recommended for production).
+chmod 600 /etc/pgpool-II/pool_passwd
+echo "[$(date)] pool_passwd created with $(wc -l < /etc/pgpool-II/pool_passwd) users"
 
 # Set correct permissions
-chown postgres:postgres /etc/pgpool-II/* || true
-if [ -n "${POOL_PASSWD_PATH:-}" ]; then
-  chmod 600 "$POOL_PASSWD_PATH" || true
-  chown postgres:postgres "$POOL_PASSWD_PATH" || true
-fi
-chmod 600 /etc/pgpool-II/pcp.conf || true
+chown postgres:postgres /etc/pgpool-II/*
+chmod 600 /etc/pgpool-II/pool_passwd
+chmod 600 /etc/pgpool-II/pcp.conf
 
 # Create pgpool user in PostgreSQL if not exists (on primary node)
 echo "[$(date)] Creating pgpool user on primary ($PRIMARY_NODE)..."
