@@ -140,44 +140,44 @@ echo ""
 
 # Create pg-1 with variables
 create_service_with_vars "pg-1" \
-    "NODE_NAME=pg-1" \
+    "NODE_NAME=\${{RAILWAY_PRIVATE_DOMAIN}}" \
     "NODE_ID=1" \
     "NODE_PRIORITY=100" \
-    "PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal" \
-    "PRIMARY_HOST=pg-1.railway.internal"
+    "PEERS=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}},\${{pg-2.RAILWAY_PRIVATE_DOMAIN}},\${{pg-3.RAILWAY_PRIVATE_DOMAIN}},\${{pg-4.RAILWAY_PRIVATE_DOMAIN}}" \
+    "PRIMARY_HOST=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}}"
 
 # Create pg-2 with variables
 create_service_with_vars "pg-2" \
-    "NODE_NAME=pg-2" \
+    "NODE_NAME=\${{RAILWAY_PRIVATE_DOMAIN}}" \
     "NODE_ID=2" \
     "NODE_PRIORITY=90" \
-    "PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal" \
-    "PRIMARY_HOST=pg-1.railway.internal"
+    "PEERS=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}},\${{pg-2.RAILWAY_PRIVATE_DOMAIN}},\${{pg-3.RAILWAY_PRIVATE_DOMAIN}},\${{pg-4.RAILWAY_PRIVATE_DOMAIN}}" \
+    "PRIMARY_HOST=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}}"
 
 # Create pg-3 with variables
 create_service_with_vars "pg-3" \
-    "NODE_NAME=pg-3" \
+    "NODE_NAME=\${{RAILWAY_PRIVATE_DOMAIN}}" \
     "NODE_ID=3" \
     "NODE_PRIORITY=80" \
-    "PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal" \
-    "PRIMARY_HOST=pg-1.railway.internal"
+    "PEERS=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}},\${{pg-2.RAILWAY_PRIVATE_DOMAIN}},\${{pg-3.RAILWAY_PRIVATE_DOMAIN}},\${{pg-4.RAILWAY_PRIVATE_DOMAIN}}" \
+    "PRIMARY_HOST=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}}"
 
 # Create pg-4 with variables
 create_service_with_vars "pg-4" \
-    "NODE_NAME=pg-4" \
+    "NODE_NAME=\${{RAILWAY_PRIVATE_DOMAIN}}" \
     "NODE_ID=4" \
     "NODE_PRIORITY=70" \
-    "PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal" \
-    "PRIMARY_HOST=pg-1.railway.internal"
+    "PEERS=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}},\${{pg-2.RAILWAY_PRIVATE_DOMAIN}},\${{pg-3.RAILWAY_PRIVATE_DOMAIN}},\${{pg-4.RAILWAY_PRIVATE_DOMAIN}}" \
+    "PRIMARY_HOST=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}}"
 
 # Create witness with variables
 create_service_with_vars "witness" \
-    "NODE_NAME=witness" \
+    "NODE_NAME=\${{RAILWAY_PRIVATE_DOMAIN}}" \
     "NODE_ID=100" \
     "NODE_PRIORITY=0" \
     "IS_WITNESS=true" \
-    "PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal" \
-    "PRIMARY_HOST=pg-1.railway.internal"
+    "PEERS=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}},\${{pg-2.RAILWAY_PRIVATE_DOMAIN}},\${{pg-3.RAILWAY_PRIVATE_DOMAIN}},\${{pg-4.RAILWAY_PRIVATE_DOMAIN}}" \
+    "PRIMARY_HOST=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}}"
 
 echo "=================================================="
 echo "Step 3: Creating PgPool Services"
@@ -187,10 +187,10 @@ echo ""
 # Create pgpool-1 with variables
 create_service_with_vars "pgpool-1" \
     "PGPOOL_NODE_ID=0" \
-    "PGPOOL_HOSTNAME=pgpool-1.railway.internal" \
-    "PG_BACKENDS=pg-1.railway.internal:5432,pg-2.railway.internal:5432,pg-3.railway.internal:5432,pg-4.railway.internal:5432" \
+    "PGPOOL_HOSTNAME=\${{RAILWAY_PRIVATE_DOMAIN}}" \
+    "PG_BACKENDS=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}}:5432,\${{pg-2.RAILWAY_PRIVATE_DOMAIN}}:5432,\${{pg-3.RAILWAY_PRIVATE_DOMAIN}}:5432,\${{pg-4.RAILWAY_PRIVATE_DOMAIN}}:5432" \
     "EXPORT_PLAINTEXT_POOLPWD=false" \
-    "OTHER_PGPOOL_HOSTNAME=pgpool-2.railway.internal" \
+    "OTHER_PGPOOL_HOSTNAME=\${{pgpool-2.RAILWAY_PRIVATE_DOMAIN}}" \
     "OTHER_PGPOOL_PORT=5432" \
     "PGPOOL_WAIT_RETRIES=600" \
     "PGPOOL_WAIT_INTERVAL=2"
@@ -198,10 +198,10 @@ create_service_with_vars "pgpool-1" \
 # Create pgpool-2 with variables
 create_service_with_vars "pgpool-2" \
     "PGPOOL_NODE_ID=1" \
-    "PGPOOL_HOSTNAME=pgpool-2.railway.internal" \
-    "PG_BACKENDS=pg-1.railway.internal:5432,pg-2.railway.internal:5432,pg-3.railway.internal:5432,pg-4.railway.internal:5432" \
+    "PGPOOL_HOSTNAME=\${{RAILWAY_PRIVATE_DOMAIN}}" \
+    "PG_BACKENDS=\${{pg-1.RAILWAY_PRIVATE_DOMAIN}}:5432,\${{pg-2.RAILWAY_PRIVATE_DOMAIN}}:5432,\${{pg-3.RAILWAY_PRIVATE_DOMAIN}}:5432,\${{pg-4.RAILWAY_PRIVATE_DOMAIN}}:5432" \
     "EXPORT_PLAINTEXT_POOLPWD=false" \
-    "OTHER_PGPOOL_HOSTNAME=pgpool-1.railway.internal" \
+    "OTHER_PGPOOL_HOSTNAME=\${{pgpool-1.RAILWAY_PRIVATE_DOMAIN}}" \
     "OTHER_PGPOOL_PORT=5432" \
     "PGPOOL_WAIT_RETRIES=600" \
     "PGPOOL_WAIT_INTERVAL=2"
@@ -213,7 +213,7 @@ echo ""
 
 # Create haproxy with variables
 create_service_with_vars "haproxy" \
-    "PGPOOL_BACKENDS=pgpool-1.railway.internal:5432,pgpool-2.railway.internal:5432" \
+    "PGPOOL_BACKENDS=\${{pgpool-1.RAILWAY_PRIVATE_DOMAIN}}:5432,\${{pgpool-2.RAILWAY_PRIVATE_DOMAIN}}:5432" \
     "HAPROXY_STATS_PORT=8404" \
     "HAPROXY_STATS_USER=admin"
 
