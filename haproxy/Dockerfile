@@ -1,10 +1,8 @@
 FROM haproxy:3.0-alpine
 
 # Install utilities for health check scripts
-RUN apk update && apk add --no-cache \
-    bash \
-    curl \
-    socat
+# Split commands to avoid network timeout issues on Railway
+RUN apk add --no-cache bash curl socat
 
 # Create necessary directories
 RUN mkdir -p /var/lib/haproxy /run/haproxy /usr/local/etc/haproxy
