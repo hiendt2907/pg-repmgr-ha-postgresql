@@ -409,7 +409,9 @@ write_repmgr_conf
 # Accept PRIMARY_HOST if provided (compose may set PRIMARY_HOST)
 : "${PRIMARY_HOST:=}"
 if [ -n "${PRIMARY_HOST}" ]; then
-  PRIMARY_HINT="${PRIMARY_HOST}"
+  # Strip port and domain to get just hostname (e.g., pg-1.railway.internal:5432 -> pg-1)
+  PRIMARY_HINT="${PRIMARY_HOST%%.*}"  # Remove .railway.internal or any domain
+  PRIMARY_HINT="${PRIMARY_HINT%:*}"   # Remove :port if present
 fi
 
 # Validate NODE_ID is numeric (required for repmgr priority calculation)
