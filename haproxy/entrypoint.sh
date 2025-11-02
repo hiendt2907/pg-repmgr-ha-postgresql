@@ -129,18 +129,18 @@ echo "[$(date)] Adding PgPool backends: $PGPOOL_BACKENDS"
 
 IFS=',' read -ra BACKENDS <<< "$PGPOOL_BACKENDS"
 SERVER_ID=1
-for backend in "\${BACKENDS[@]}"; do
-    host=\$(echo "\$backend" | cut -d: -f1)
-    port=\$(echo "\$backend" | cut -s -d: -f2)
-    if [ -z "\$port" ]; then port=5432; fi
+for backend in "${BACKENDS[@]}"; do
+    host=$(echo "$backend" | cut -d: -f1)
+    port=$(echo "$backend" | cut -s -d: -f2)
+    if [ -z "$port" ]; then port=5432; fi
     
     # Add server entry
     cat >> /usr/local/etc/haproxy/haproxy.cfg <<BACKEND_EOF
     # PgPool node $SERVER_ID
-    server pgpool-$SERVER_ID \$host:\$port check inter 3s fastinter 1s downinter 5s rise 2 fall 3 maxconn 20000
+    server pgpool-$SERVER_ID $host:$port check inter 3s fastinter 1s downinter 5s rise 2 fall 3 maxconn 20000
 BACKEND_EOF
     
-    SERVER_ID=\$((SERVER_ID + 1))
+    SERVER_ID=$((SERVER_ID + 1))
 done
 
 # Display configuration summary
