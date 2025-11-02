@@ -41,14 +41,14 @@ RUN mkdir -p /etc/pgpool-II /var/run/pgpool /var/log/pgpool /config \
     && chown -R postgres:postgres /etc/pgpool-II /var/run/pgpool /var/log/pgpool
 
 # Copy configuration files to /config (will be copied to /etc/pgpool-II at runtime)
-COPY postgresql-cluster/pgpool/pgpool.conf /config/
-COPY postgresql-cluster/pgpool/pool_hba.conf /config/
-COPY postgresql-cluster/pgpool/pcp.conf /config/
+COPY pgpool/pgpool.conf /config/
+COPY pgpool/pool_hba.conf /config/
+COPY pgpool/pcp.conf /config/
 
 # Copy scripts
-COPY postgresql-cluster/pgpool/entrypoint.sh /usr/local/bin/
-COPY postgresql-cluster/pgpool/monitor.sh /usr/local/bin/
-COPY postgresql-cluster/pgpool/failover.sh /usr/local/bin/
+COPY pgpool/entrypoint.sh /usr/local/bin/
+COPY pgpool/monitor.sh /usr/local/bin/
+COPY pgpool/failover.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/*.sh
 
 # Expose ports

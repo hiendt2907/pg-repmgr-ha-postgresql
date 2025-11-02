@@ -9,9 +9,9 @@ RUN apt-get update && \
 RUN mkdir -p /etc/repmgr && chown postgres:postgres /etc/repmgr
 
 # Copy scripts
-COPY postgresql-cluster/postgresql/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY postgresql-cluster/scripts/monitor.sh /usr/local/bin/monitor.sh
-COPY postgresql-cluster/scripts/promote_guard.sh /usr/local/bin/promote_guard.sh
+COPY postgresql/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY scripts/monitor.sh /usr/local/bin/monitor.sh
+COPY scripts/promote_guard.sh /usr/local/bin/promote_guard.sh
 
 RUN chmod +x /usr/local/bin/*.sh
 

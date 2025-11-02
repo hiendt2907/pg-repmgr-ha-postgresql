@@ -11,8 +11,8 @@ RUN apk add --no-cache \
 RUN mkdir -p /var/lib/haproxy /run/haproxy /usr/local/etc/haproxy
 
 # Copy configuration files
-COPY postgresql-cluster/haproxy/haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
-COPY postgresql-cluster/haproxy/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY haproxy/haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
+COPY haproxy/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
