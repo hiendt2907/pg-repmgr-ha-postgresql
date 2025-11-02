@@ -361,12 +361,19 @@ clone_standby() {
 
   until wait_for_port "$host" "$port" 10; do sleep 2; done
   safe_clear_pgdata
-  gosu postgres initdb -D "$PGDATA" --data-checksums
-  write_pg_hba
-  write_postgresql_conf
+  
+  # Write repmgr.conf before clone (needed for clone operation)
   write_repmgr_conf
 
+  # Clone entire PGDATA from primary (includes users, databases, config)
+  log "Running repmgr standby clone from $host:$port"
   gosu postgres repmgr -h "$host" -p "$port" -U "$REPMGR_USER" -d "$REPMGR_DB" -f "$REPMGR_CONF" standby clone --force
+  
+  # After clone, pg_hba and postgresql.conf are copied from primary
+  # We need to regenerate them for this specific standby node
+  write_pg_hba
+  write_postgresql_conf
+  
   gosu postgres pg_ctl -D "$PGDATA" -w start
   gosu postgres repmgr -h "$host" -p "$port" -U "$REPMGR_USER" -d "$REPMGR_DB" -f "$REPMGR_CONF" standby register --force
   wait_for_metadata 30 || true
