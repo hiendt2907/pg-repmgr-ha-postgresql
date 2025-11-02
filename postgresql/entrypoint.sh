@@ -240,8 +240,10 @@ EOF
 }
 
 write_repmgr_conf() {
-  # Escape single quotes in password: replace ' with ''
-  local escaped_password="${REPMGR_PASSWORD//\'/\'\'}"
+  # For conninfo libpq format: backslash and single-quote need escaping
+  # Reference: https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING
+  local escaped_password="${REPMGR_PASSWORD//\\/\\\\}"  # Escape backslash first
+  escaped_password="${escaped_password//\'/\\\'}"        # Then escape single quote with backslash
   
   cat > "$REPMGR_CONF" <<EOF
 node_id=${NODE_ID}
