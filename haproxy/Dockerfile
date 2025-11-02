@@ -1,7 +1,9 @@
 FROM haproxy:3.0-alpine
 
+# Switch to root to install packages
+USER root
+
 # Install utilities for health check scripts
-# Split commands to avoid network timeout issues on Railway
 RUN apk add --no-cache bash curl socat
 
 # Create necessary directories
