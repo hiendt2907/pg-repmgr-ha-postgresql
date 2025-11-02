@@ -240,13 +240,13 @@ EOF
 }
 
 write_repmgr_conf() {
-  # Escape single quotes in password for connection string
+  # Escape single quotes in password: replace ' with ''
   local escaped_password="${REPMGR_PASSWORD//\'/\'\'}"
   
   cat > "$REPMGR_CONF" <<EOF
 node_id=${NODE_ID}
 node_name='${NODE_NAME}'
-conninfo='host=${NODE_NAME} port=${PG_PORT} user=${REPMGR_USER} dbname=${REPMGR_DB} password='\''${escaped_password}'\'' connect_timeout=5'
+conninfo='host=${NODE_NAME} port=${PG_PORT} user=${REPMGR_USER} dbname=${REPMGR_DB} password=${escaped_password} connect_timeout=5'
 data_directory='${PGDATA}'
 
 log_level=INFO
@@ -555,16 +555,20 @@ else
     if [ -n "$lk_primary" ]; then
       log "No reachable primary; last-known-primary is '$lk_primary'"
       if [ "$NODE_NAME" = "$lk_primary" ]; then
-        log "This node is the last-known-primary → will bootstrap as primary after timeout"
-        # Wait a bit for peers; if none become primary, start local PG and register as primary
-        for i in $(seq 1 "$RETRY_ROUNDS"); do
-          sleep "$RETRY_INTERVAL"
+        log "This node is the last-known-primary → checking if should bootstrap immediately"
+        
+        # Quick check if any other node is becoming primary (wait max 10s)
+        current_primary=""
+        for i in $(seq 1 2); do
+          sleep 5
           current_primary=$(find_new_primary || true)
           [ -n "$current_primary" ] && break
-          log "Waiting before bootstrap as last-known-primary..."
+          log "Quick check: no other primary found (attempt $i/2)"
         done
+        
         if [ -z "$current_primary" ]; then
-          # Bootstrap from existing data; do NOT initdb (preserve data)
+          # No other primary after quick check → bootstrap immediately
+          log "No other primary detected → bootstrapping as primary now"
           gosu postgres pg_ctl -D "$PGDATA" -w start
           gosu postgres repmgr -f "$REPMGR_CONF" primary register --force
           write_last_primary "$NODE_NAME"
