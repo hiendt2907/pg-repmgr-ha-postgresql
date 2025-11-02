@@ -327,6 +327,21 @@ init_primary() {
   gosu postgres psql -U "$POSTGRES_USER" -tc "SELECT 1 FROM pg_database WHERE datname='${REPMGR_DB}'" | grep -q 1 \
     || gosu postgres psql -U "$POSTGRES_USER" -c "CREATE DATABASE ${REPMGR_DB} OWNER ${REPMGR_USER};"
 
+  # CRITICAL: Test authentication immediately after user creation
+  log "Testing repmgr user authentication..."
+  if PGPASSWORD="${REPMGR_PASSWORD}" psql -h localhost -U "${REPMGR_USER}" -d "${REPMGR_DB}" -c "SELECT 1" >/dev/null 2>&1; then
+    log "✓ repmgr user authentication test PASSED"
+  else
+    log "✗ ERROR: repmgr user authentication test FAILED!"
+    log "  This means the password in database does NOT match REPMGR_PASSWORD environment variable"
+    log "  Password length: ${#REPMGR_PASSWORD} chars"
+    log "  Troubleshooting:"
+    log "    1. Check Railway shared variable REPMGR_PASSWORD value"
+    log "    2. Ensure variable hasn't changed between deployments"
+    log "    3. Delete all volumes and redeploy from scratch if password was regenerated"
+    exit 1
+  fi
+
   # Create application users with limited permissions
   log "Creating application users..."
   
