@@ -213,9 +213,8 @@ EOF
 write_pg_hba() {
   cat > "$PGDATA/pg_hba.conf" <<EOF
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-# Local connections: use peer for postgres system/admin user so container's postgres user can run psql
-local   all             postgres                                peer
-local   replication     all                                      peer
+# Local connections (trusted for admin tasks inside container)
+local   all             all                                     trust
 
 # Application users (SCRAM-SHA-256 for strong password encryption)
 host    all             app_readonly    0.0.0.0/0               scram-sha-256
