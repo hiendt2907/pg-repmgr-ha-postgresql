@@ -516,6 +516,13 @@ if pgrep -f pgpool > /dev/null; then
   sleep 2
 fi
 
+# Aggressive cleanup of ALL possible PID file locations
+echo "[$(date)] Final PID file cleanup before start..."
+find /var/run/pgpool -name "*.pid" -delete 2>/dev/null || true
+find /run/pgpool -name "*.pid" -delete 2>/dev/null || true
+find /tmp -name "pgpool*.pid" -delete 2>/dev/null || true
+rm -f /var/run/pgpool.pid /run/pgpool.pid 2>/dev/null || true
+
 # Start pgpool-II
 echo "[$(date)] Starting pgpool-II..."
 exec gosu postgres pgpool -n -f /etc/pgpool-II/pgpool.conf -F /etc/pgpool-II/pcp.conf -a /etc/pgpool-II/pool_hba.conf
