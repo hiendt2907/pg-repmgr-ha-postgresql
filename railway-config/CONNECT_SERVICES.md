@@ -43,6 +43,14 @@ Service: pg-1, pg-2, pg-3, pg-4, witness
 └─ Dockerfile Path: postgresql/Dockerfile
 ```
 
+#### Important: Witness Node Configuration
+
+The **witness** service requires an additional environment variable:
+- Go to **Variables** tab
+- Add: `IS_WITNESS=true`
+
+Without this variable, witness will run as a regular data node instead of a quorum-only node.
+
 ---
 
 ### 3. Connect PgPool Services

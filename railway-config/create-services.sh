@@ -175,6 +175,7 @@ create_service_with_vars "witness" \
     "NODE_NAME=witness" \
     "NODE_ID=100" \
     "NODE_PRIORITY=0" \
+    "IS_WITNESS=true" \
     "PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal" \
     "PRIMARY_HOST=pg-1.railway.internal"
 

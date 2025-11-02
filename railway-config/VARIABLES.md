@@ -19,52 +19,55 @@ RETRY_INTERVAL=5
 RETRY_ROUNDS=36
 ```
 
-### 2. Service Variables - Per service (chỉ 4-5 variables)
+### 2. Service Variables - Per service (chỉ 5-6 variables)
 
 #### pg-1 service:
 ```bash
 NODE_NAME=pg-1
 NODE_ID=1
-PRIMARY_HINT=pg-1.railway.internal
-IS_WITNESS=false
-PEERS=pg-1.railway.internal:5432,pg-2.railway.internal:5432,pg-3.railway.internal:5432,pg-4.railway.internal:5432,witness.railway.internal:5432
+NODE_PRIORITY=100
+PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal
+PRIMARY_HOST=pg-1.railway.internal
 ```
 
 #### pg-2 service:
 ```bash
 NODE_NAME=pg-2
 NODE_ID=2
-PRIMARY_HINT=pg-1.railway.internal
-IS_WITNESS=false
-PEERS=pg-1.railway.internal:5432,pg-2.railway.internal:5432,pg-3.railway.internal:5432,pg-4.railway.internal:5432,witness.railway.internal:5432
+NODE_PRIORITY=90
+PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal
+PRIMARY_HOST=pg-1.railway.internal
 ```
 
 #### pg-3 service:
 ```bash
 NODE_NAME=pg-3
 NODE_ID=3
-PRIMARY_HINT=pg-1.railway.internal
-IS_WITNESS=false
-PEERS=pg-1.railway.internal:5432,pg-2.railway.internal:5432,pg-3.railway.internal:5432,pg-4.railway.internal:5432,witness.railway.internal:5432
+NODE_PRIORITY=80
+PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal
+PRIMARY_HOST=pg-1.railway.internal
 ```
 
 #### pg-4 service:
 ```bash
 NODE_NAME=pg-4
 NODE_ID=4
-PRIMARY_HINT=pg-1.railway.internal
-IS_WITNESS=false
-PEERS=pg-1.railway.internal:5432,pg-2.railway.internal:5432,pg-3.railway.internal:5432,pg-4.railway.internal:5432,witness.railway.internal:5432
+NODE_PRIORITY=70
+PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal
+PRIMARY_HOST=pg-1.railway.internal
 ```
 
 #### witness service:
 ```bash
 NODE_NAME=witness
-NODE_ID=99
-PRIMARY_HINT=pg-1.railway.internal
+NODE_ID=100
+NODE_PRIORITY=0
 IS_WITNESS=true
-PEERS=pg-1.railway.internal:5432,pg-2.railway.internal:5432,pg-3.railway.internal:5432,pg-4.railway.internal:5432,witness.railway.internal:5432
+PEERS=pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal
+PRIMARY_HOST=pg-1.railway.internal
 ```
+
+**⚠️ CRITICAL:** Witness **MUST** have `IS_WITNESS=true` or it will run as a data node!
 
 ## Railway Auto-Injected Variables
 
