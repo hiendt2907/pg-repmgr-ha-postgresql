@@ -17,6 +17,13 @@ rm -f /tmp/pgpool*.pid
 sleep 3
 
 # Environment variables with defaults
+PGPOOL_NODE_ID=${PGPOOL_NODE_ID:-1}
+# Default PGPOOL_HOSTNAME to the container hostname if not provided by the environment
+PGPOOL_HOSTNAME=${PGPOOL_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}
+# Default other pgpool hostname (can be overridden by env)
+OTHER_PGPOOL_HOSTNAME=${OTHER_PGPOOL_HOSTNAME:-pgpool-2.railway.internal}
+OTHER_PGPOOL_PORT=${OTHER_PGPOOL_PORT:-5432}
+
 # Passwords: prefer Docker secrets (mounted at /run/secrets/<NAME>), fallback to env
 read_secret_or_env() {
   local name="$1" default="$2"
@@ -36,9 +43,16 @@ APP_READONLY_PASSWORD=$(read_secret_or_env APP_READONLY_PASSWORD)
 APP_READWRITE_PASSWORD=$(read_secret_or_env APP_READWRITE_PASSWORD)
 # PCP / admin password (optional; default kept for backward compatibility)
 PCP_PASSWORD=${PCP_PASSWORD:-adminpass}
-# Whether to also export plaintext pool_passwd (default: true for backward compatibility).
-# Set EXPORT_PLAINTEXT_POOLPWD=false to avoid writing plain text passwords to /etc/pgpool-II/pool_passwd
-EXPORT_PLAINTEXT_POOLPWD=${EXPORT_PLAINTEXT_POOLPWD:-true}
+
+# Validate required passwords
+if [ -z "$POSTGRES_PASSWORD" ] || [ -z "$REPMGR_PASSWORD" ] || [ -z "$APP_READONLY_PASSWORD" ] || [ -z "$APP_READWRITE_PASSWORD" ]; then
+  echo "[ERROR] Required password environment variables are not set!"
+  echo "  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:+SET}"
+  echo "  REPMGR_PASSWORD: ${REPMGR_PASSWORD:+SET}"
+  echo "  APP_READONLY_PASSWORD: ${APP_READONLY_PASSWORD:+SET}"
+  echo "  APP_READWRITE_PASSWORD: ${APP_READWRITE_PASSWORD:+SET}"
+  exit 1
+fi
 
 # Create necessary directories
 mkdir -p /var/run/pgpool /var/log/pgpool
