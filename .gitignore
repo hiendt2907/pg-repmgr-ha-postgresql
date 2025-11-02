@@ -1,0 +1,50 @@
+# Credentials and secrets
+.env
+.env.*
+!.env.example
+railway-credentials-*.txt
+*.pem
+*.key
+
+# Data directories
+pg-data/
+*/pg-data/
+pgpool-data/
+logs/
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups
+*.tar.gz
+*.backup
+*.sql
+*.dump
+
+# Test artifacts
+latency_log_*.csv
+stress-test-results/

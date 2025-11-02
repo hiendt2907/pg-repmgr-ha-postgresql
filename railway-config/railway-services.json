@@ -1,0 +1,299 @@
+{
+  "version": "2.0",
+  "description": "PostgreSQL HA Cluster: Client → HAProxy → 2 PgPool (LB/Splitting) → 4 PostgreSQL + Witness",
+  "notes": {
+    "architecture": "HAProxy provides single endpoint for client connections, load-balances to 2 PgPool nodes which handle read/write splitting across 4 PostgreSQL nodes with auto-failover",
+    "resources": "Optimized for Railway Pro: 32 vCPU / 32 GB RAM per service",
+    "failover_sla": "Target: < 10s total failover time (detection + promotion + client reconnect)"
+  },
+  "services": {
+    "haproxy": {
+      "name": "haproxy",
+      "source": {
+        "type": "dockerfile",
+        "dockerfile": "postgresql-cluster/haproxy/Dockerfile",
+        "context": "."
+      },
+      "environmentVariables": {
+        "PGPOOL_BACKENDS": "pgpool-1.railway.internal:5432,pgpool-2.railway.internal:5432",
+        "HAPROXY_STATS_PORT": "8404",
+        "HAPROXY_STATS_USER": "admin",
+        "HAPROXY_STATS_PASSWORD": "${{shared.HAPROXY_STATS_PASSWORD}}"
+      },
+      "healthcheck": {
+        "path": null,
+        "command": "nc -zv localhost 5432 || exit 1"
+      },
+      "publicDomain": true,
+      "resources": {
+        "vcpu": 8,
+        "memory_gb": 4,
+        "note": "HAProxy is CPU-bound for packet processing; 8 vCPU sufficient for high throughput"
+      }
+    },
+    "pg-1": {
+      "name": "pg-1",
+      "source": {
+        "type": "dockerfile",
+        "dockerfile": "postgresql-cluster/postgresql/Dockerfile"
+      },
+      "volumes": [
+        {
+          "name": "pg-1-data",
+          "mountPath": "/var/lib/postgresql/data"
+        }
+      ],
+      "environmentVariables": {
+        "NODE_NAME": "pg-1",
+        "REPMGR_NODE_ID": "1",
+        "NODE_PRIORITY": "100",
+        "PEERS": "pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal",
+        "PRIMARY_HOST": "pg-1.railway.internal",
+        "POSTGRES_PASSWORD": "${{shared.POSTGRES_PASSWORD}}",
+        "REPMGR_PASSWORD": "${{shared.REPMGR_PASSWORD}}",
+        "APP_READONLY_PASSWORD": "${{shared.APP_READONLY_PASSWORD}}",
+        "APP_READWRITE_PASSWORD": "${{shared.APP_READWRITE_PASSWORD}}",
+        "REPMGR_PROMOTE_MAX_LAG_SECS": "5"
+      },
+      "healthcheck": {
+        "path": null,
+        "command": "pg_isready -U postgres"
+      },
+      "resources": {
+        "vcpu": 32,
+        "memory_gb": 32,
+        "disk_gb": 100,
+        "note": "Primary node handles all writes; maximum resources for performance"
+      }
+    },
+    "pg-2": {
+      "name": "pg-2",
+      "source": {
+        "type": "dockerfile",
+        "dockerfile": "postgresql-cluster/postgresql/Dockerfile"
+      },
+      "volumes": [
+        {
+          "name": "pg-2-data",
+          "mountPath": "/var/lib/postgresql/data"
+        }
+      ],
+      "environmentVariables": {
+        "NODE_NAME": "pg-2",
+        "REPMGR_NODE_ID": "2",
+        "NODE_PRIORITY": "90",
+        "PEERS": "pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal",
+        "PRIMARY_HOST": "pg-1.railway.internal",
+        "POSTGRES_PASSWORD": "${{shared.POSTGRES_PASSWORD}}",
+        "REPMGR_PASSWORD": "${{shared.REPMGR_PASSWORD}}",
+        "APP_READONLY_PASSWORD": "${{shared.APP_READONLY_PASSWORD}}",
+        "APP_READWRITE_PASSWORD": "${{shared.APP_READWRITE_PASSWORD}}",
+        "REPMGR_PROMOTE_MAX_LAG_SECS": "5"
+      },
+      "healthcheck": {
+        "path": null,
+        "command": "pg_isready -U postgres"
+      },
+      "resources": {
+        "vcpu": 32,
+        "memory_gb": 32,
+        "disk_gb": 100,
+        "note": "Standby with highest priority for failover; full resources for read queries"
+      }
+    },
+    "pg-3": {
+      "name": "pg-3",
+      "source": {
+        "type": "dockerfile",
+        "dockerfile": "postgresql-cluster/postgresql/Dockerfile"
+      },
+      "volumes": [
+        {
+          "name": "pg-3-data",
+          "mountPath": "/var/lib/postgresql/data"
+        }
+      ],
+      "environmentVariables": {
+        "NODE_NAME": "pg-3",
+        "REPMGR_NODE_ID": "3",
+        "NODE_PRIORITY": "80",
+        "PEERS": "pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal",
+        "PRIMARY_HOST": "pg-1.railway.internal",
+        "POSTGRES_PASSWORD": "${{shared.POSTGRES_PASSWORD}}",
+        "REPMGR_PASSWORD": "${{shared.REPMGR_PASSWORD}}",
+        "APP_READONLY_PASSWORD": "${{shared.APP_READONLY_PASSWORD}}",
+        "APP_READWRITE_PASSWORD": "${{shared.APP_READWRITE_PASSWORD}}",
+        "REPMGR_PROMOTE_MAX_LAG_SECS": "5"
+      },
+      "healthcheck": {
+        "path": null,
+        "command": "pg_isready -U postgres"
+      },
+      "resources": {
+        "vcpu": 32,
+        "memory_gb": 32,
+        "disk_gb": 100,
+        "note": "Standby for read load balancing"
+      }
+    },
+    "pg-4": {
+      "name": "pg-4",
+      "source": {
+        "type": "dockerfile",
+        "dockerfile": "postgresql-cluster/postgresql/Dockerfile"
+      },
+      "volumes": [
+        {
+          "name": "pg-4-data",
+          "mountPath": "/var/lib/postgresql/data"
+        }
+      ],
+      "environmentVariables": {
+        "NODE_NAME": "pg-4",
+        "REPMGR_NODE_ID": "4",
+        "NODE_PRIORITY": "70",
+        "PEERS": "pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal",
+        "PRIMARY_HOST": "pg-1.railway.internal",
+        "POSTGRES_PASSWORD": "${{shared.POSTGRES_PASSWORD}}",
+        "REPMGR_PASSWORD": "${{shared.REPMGR_PASSWORD}}",
+        "APP_READONLY_PASSWORD": "${{shared.APP_READONLY_PASSWORD}}",
+        "APP_READWRITE_PASSWORD": "${{shared.APP_READWRITE_PASSWORD}}",
+        "REPMGR_PROMOTE_MAX_LAG_SECS": "5"
+      },
+      "healthcheck": {
+        "path": null,
+        "command": "pg_isready -U postgres"
+      },
+      "resources": {
+        "vcpu": 32,
+        "memory_gb": 32,
+        "disk_gb": 100,
+        "note": "Standby for read load balancing"
+      }
+    },
+    "witness": {
+      "name": "witness",
+      "source": {
+        "type": "dockerfile",
+        "dockerfile": "postgresql-cluster/postgresql/Dockerfile"
+      },
+      "volumes": [
+        {
+          "name": "witness-data",
+          "mountPath": "/var/lib/postgresql/data"
+        }
+      ],
+      "environmentVariables": {
+        "NODE_NAME": "witness",
+        "REPMGR_NODE_ID": "100",
+        "NODE_PRIORITY": "0",
+        "PEERS": "pg-1.railway.internal,pg-2.railway.internal,pg-3.railway.internal,pg-4.railway.internal",
+        "PRIMARY_HOST": "pg-1.railway.internal",
+        "POSTGRES_PASSWORD": "${{shared.POSTGRES_PASSWORD}}",
+        "REPMGR_PASSWORD": "${{shared.REPMGR_PASSWORD}}"
+      },
+      "healthcheck": {
+        "path": null,
+        "command": "pg_isready -U postgres"
+      },
+      "resources": {
+        "vcpu": 2,
+        "memory_gb": 2,
+        "disk_gb": 10,
+        "note": "Lightweight quorum node; minimal resources sufficient"
+      }
+    },
+    "pgpool-1": {
+      "name": "pgpool-1",
+      "source": {
+        "type": "dockerfile",
+        "dockerfile": "postgresql-cluster/pgpool/Dockerfile",
+        "context": "."
+      },
+      "environmentVariables": {
+        "PGPOOL_NODE_ID": "0",
+        "PGPOOL_HOSTNAME": "pgpool-1.railway.internal",
+        "PG_BACKENDS": "pg-1.railway.internal:5432,pg-2.railway.internal:5432,pg-3.railway.internal:5432,pg-4.railway.internal:5432",
+        "POSTGRES_PASSWORD": "${{shared.POSTGRES_PASSWORD}}",
+        "REPMGR_PASSWORD": "${{shared.REPMGR_PASSWORD}}",
+        "APP_READONLY_PASSWORD": "${{shared.APP_READONLY_PASSWORD}}",
+        "APP_READWRITE_PASSWORD": "${{shared.APP_READWRITE_PASSWORD}}",
+        "PCP_PASSWORD": "${{shared.PCP_PASSWORD}}",
+        "EXPORT_PLAINTEXT_POOLPWD": "false",
+        "OTHER_PGPOOL_HOSTNAME": "pgpool-2.railway.internal",
+        "OTHER_PGPOOL_PORT": "5432",
+        "PGPOOL_WAIT_RETRIES": "600",
+        "PGPOOL_WAIT_INTERVAL": "2"
+      },
+      "healthcheck": {
+        "path": null,
+        "command": "pcp_node_count -h localhost -p 9898 -U admin -w || exit 1"
+      },
+      "resources": {
+        "vcpu": 16,
+        "memory_gb": 32,
+        "note": "PgPool handles connection pooling + query routing; 500 children * 10 conns = 5000 backend connections needs significant RAM"
+      }
+    },
+    "pgpool-2": {
+      "name": "pgpool-2",
+      "source": {
+        "type": "dockerfile",
+        "dockerfile": "postgresql-cluster/pgpool/Dockerfile",
+        "context": "."
+      },
+      "environmentVariables": {
+        "PGPOOL_NODE_ID": "1",
+        "PGPOOL_HOSTNAME": "pgpool-2.railway.internal",
+        "PG_BACKENDS": "pg-1.railway.internal:5432,pg-2.railway.internal:5432,pg-3.railway.internal:5432,pg-4.railway.internal:5432",
+        "POSTGRES_PASSWORD": "${{shared.POSTGRES_PASSWORD}}",
+        "REPMGR_PASSWORD": "${{shared.REPMGR_PASSWORD}}",
+        "APP_READONLY_PASSWORD": "${{shared.APP_READONLY_PASSWORD}}",
+        "APP_READWRITE_PASSWORD": "${{shared.APP_READWRITE_PASSWORD}}",
+        "PCP_PASSWORD": "${{shared.PCP_PASSWORD}}",
+        "EXPORT_PLAINTEXT_POOLPWD": "false",
+        "OTHER_PGPOOL_HOSTNAME": "pgpool-1.railway.internal",
+        "OTHER_PGPOOL_PORT": "5432",
+        "PGPOOL_WAIT_RETRIES": "600",
+        "PGPOOL_WAIT_INTERVAL": "2"
+      },
+      "healthcheck": {
+        "path": null,
+        "command": "pcp_node_count -h localhost -p 9898 -U admin -w || exit 1"
+      },
+      "resources": {
+        "vcpu": 16,
+        "memory_gb": 32,
+        "note": "PgPool handles connection pooling + query routing; 500 children * 10 conns = 5000 backend connections needs significant RAM"
+      }
+    }
+  },
+  "shared": {
+    "POSTGRES_PASSWORD": "CHANGE_ME_STRONG_PASSWORD",
+    "REPMGR_PASSWORD": "CHANGE_ME_REPMGR_PASSWORD",
+    "APP_READONLY_PASSWORD": "CHANGE_ME_READONLY_PASSWORD",
+    "APP_READWRITE_PASSWORD": "CHANGE_ME_READWRITE_PASSWORD",
+    "PCP_PASSWORD": "CHANGE_ME_PCP_ADMIN_PASSWORD",
+    "HAPROXY_STATS_PASSWORD": "CHANGE_ME_HAPROXY_STATS_PASSWORD"
+  },
+  "deployment_order": [
+    "1. Deploy pg-1 (primary) first, wait until healthy",
+    "2. Deploy pg-2, pg-3, pg-4 (standbys) in parallel, wait until all healthy",
+    "3. Deploy witness",
+    "4. Deploy pgpool-1, pgpool-2 in parallel, wait until healthy",
+    "5. Deploy haproxy last (after all backends are ready)",
+    "6. Generate public domain for haproxy service only"
+  ],
+  "connection_string": {
+    "application": "postgresql://app_readwrite:PASSWORD@haproxy-production-xxxx.railway.app:5432/postgres",
+    "readonly": "postgresql://app_readonly:PASSWORD@haproxy-production-xxxx.railway.app:5432/postgres",
+    "admin_direct": "railway run --service pg-1 -- psql -U postgres",
+    "haproxy_stats": "http://haproxy-production-xxxx.railway.app:8404 (user: admin, pass: HAPROXY_STATS_PASSWORD)"
+  },
+  "performance_notes": {
+    "total_capacity": "~40,000 concurrent client connections via HAProxy → 2 PgPool (500 children each)",
+    "backend_connections": "Each PgPool: 500 children * 10 conns/backend = 5,000 connections per backend",
+    "query_cache": "PgPool memory cache: 4GB per instance (8GB total across 2 PgPool)",
+    "failover_time": "Target < 10s: Detection (2s*3=6s) + Promotion (<2s) + Client reconnect (<2s)"
+  }
+}

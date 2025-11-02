@@ -1,0 +1,95 @@
+services:
+  pg-1:
+    build: .
+    container_name: pg-1
+    environment:
+      - NODE_NAME=pg-1
+      - NODE_ID=1
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REPMGR_PASSWORD=${REPMGR_PASSWORD}
+      - APP_READONLY_PASSWORD=${APP_READONLY_PASSWORD}
+      - APP_READWRITE_PASSWORD=${APP_READWRITE_PASSWORD}
+      - PEERS=pg-2,pg-3
+    volumes:
+      - pg-1_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    labels:
+      - cluster=pg_ha_cluster
+
+  pg-2:
+    build: .
+    container_name: pg-2
+    environment:
+      - NODE_NAME=pg-2
+      - NODE_ID=2
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REPMGR_PASSWORD=${REPMGR_PASSWORD}
+      - APP_READONLY_PASSWORD=${APP_READONLY_PASSWORD}
+      - APP_READWRITE_PASSWORD=${APP_READWRITE_PASSWORD}
+      - PEERS=pg-1,pg-3
+    volumes:
+      - pg-2_data:/var/lib/postgresql/data
+    depends_on:
+      - pg-1
+    labels:
+      - cluster=pg_ha_cluster
+
+  pg-3:
+    build: .
+    container_name: pg-3
+    environment:
+      - NODE_NAME=pg-3
+      - NODE_ID=3
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REPMGR_PASSWORD=${REPMGR_PASSWORD}
+      - APP_READONLY_PASSWORD=${APP_READONLY_PASSWORD}
+      - APP_READWRITE_PASSWORD=${APP_READWRITE_PASSWORD}
+      - PEERS=pg-1,pg-2
+    volumes:
+      - pg-3_data:/var/lib/postgresql/data
+    depends_on:
+      - pg-1
+    labels:
+      - cluster=pg_ha_cluster
+
+  pg-4:
+    build: .
+    container_name: pg-4
+    environment:
+      - NODE_NAME=pg-4
+      - NODE_ID=4
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REPMGR_PASSWORD=${REPMGR_PASSWORD}
+      - APP_READONLY_PASSWORD=${APP_READONLY_PASSWORD}
+      - APP_READWRITE_PASSWORD=${APP_READWRITE_PASSWORD}
+      - PEERS=pg-1,pg-2
+    volumes:
+      - pg-4_data:/var/lib/postgresql/data
+    depends_on:
+      - pg-1
+    labels:
+      - cluster=pg_ha_cluster
+
+  witness:
+    build: .
+    container_name: witness
+    environment:
+      - NODE_NAME=witness
+      - NODE_ID=99
+      - IS_WITNESS=true
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REPMGR_PASSWORD=${REPMGR_PASSWORD}
+      - PRIMARY_HOST=pg-1
+      - PEERS=pg-1,pg-2,pg-3
+      - APP_READONLY_PASSWORD=${APP_READONLY_PASSWORD}
+      - APP_READWRITE_PASSWORD=${APP_READWRITE_PASSWORD}
+    # witness không cần volume data vì không chạy postgres cluster
+    labels:
+      - cluster=pg_ha_cluster
+
+volumes:
+  pg-1_data:
+  pg-2_data:
+  pg-3_data:
+  pg-4_data:
