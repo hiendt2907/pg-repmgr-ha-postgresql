@@ -18,7 +18,27 @@ Select your project (the one you linked with `railway link`)
 
 ---
 
-### 2. Connect PostgreSQL Services
+### 2. Verify Shared Variables are Accessible
+
+**CRITICAL:** Railway shared variables must be referenced in each service!
+
+For **each PostgreSQL service** (pg-1, pg-2, pg-3, pg-4, witness):
+
+1. Go to service → **Variables** tab
+2. Click **Raw Editor**
+3. Add these references to shared variables:
+```
+POSTGRES_PASSWORD=${{shared.POSTGRES_PASSWORD}}
+REPMGR_PASSWORD=${{shared.REPMGR_PASSWORD}}
+APP_READONLY_PASSWORD=${{shared.APP_READONLY_PASSWORD}}
+APP_READWRITE_PASSWORD=${{shared.APP_READWRITE_PASSWORD}}
+```
+
+**Why?** Shared variables in Railway aren't automatically injected. Services need explicit references using `${{shared.VARIABLE_NAME}}` syntax.
+
+---
+
+### 3. Connect PostgreSQL Services
 
 For each PostgreSQL service: **pg-1**, **pg-2**, **pg-3**, **pg-4**, **witness**
 
@@ -53,7 +73,7 @@ Without this variable, witness will run as a regular data node instead of a quor
 
 ---
 
-### 3. Connect PgPool Services
+### 4. Connect PgPool Services
 
 For each PgPool service: **pgpool-1**, **pgpool-2**
 
@@ -80,7 +100,7 @@ Service: pgpool-1, pgpool-2
 
 ---
 
-### 4. Connect HAProxy Service
+### 5. Connect HAProxy Service
 
 For service: **haproxy**
 
@@ -107,7 +127,7 @@ Service: haproxy
 
 ---
 
-### 5. Enable Public Domain for HAProxy
+### 6. Enable Public Domain for HAProxy
 
 HAProxy is the **only service** that needs a public domain (client entry point).
 

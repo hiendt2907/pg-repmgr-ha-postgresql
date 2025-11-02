@@ -1,10 +1,9 @@
 FROM haproxy:3.0-alpine
 
-# Install postgresql-client for health check scripts (optional)
-RUN apk add --no-cache \
+# Install utilities for health check scripts
+RUN apk update && apk add --no-cache \
     bash \
     curl \
-    postgresql-client \
     socat
 
 # Create necessary directories
