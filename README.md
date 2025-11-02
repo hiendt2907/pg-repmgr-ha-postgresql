@@ -22,6 +22,52 @@ PgPool-1      PgPool-2
 (Primary)(Standby)(Standby)(Standby)(Quorum)
 ```
 
+## Quick Start (Railway)
+
+### 1. Clone & Setup
+```bash
+git clone https://github.com/hiendt2907/pg-repmgr-ha-postgresql.git
+cd pg-repmgr-ha-postgresql
+```
+
+### 2. Create Railway Services
+```bash
+# Login to Railway
+railway login
+
+# Link or create project
+railway link  # or: railway init
+
+# Generate credentials & create services
+cd railway-config
+./setup-variables.sh
+./create-services.sh
+```
+
+### 3. Connect GitHub Repo to Services
+Follow the guide: **[CONNECT_SERVICES.md](railway-config/CONNECT_SERVICES.md)**
+
+This step connects the GitHub repository to each Railway service and sets the correct Dockerfile path.
+
+### 4. Deploy
+Services will auto-deploy after connecting the repo. Monitor deployment order:
+1. pg-1 (primary) → wait for ready
+2. pg-2, pg-3, pg-4 (standbys) → wait for clone complete
+3. witness → wait for registration
+4. pgpool-1, pgpool-2 → wait for startup
+5. haproxy → enable public domain
+
+### 5. Verify
+```bash
+# Get HAProxy public URL from Railway Dashboard
+HAPROXY_URL="<your-domain>.up.railway.app"
+
+# Test connection
+psql "postgresql://postgres:<password>@${HAPROXY_URL}:5432/postgres"
+```
+
+---
+
 ## Components
 
 ### 1. HAProxy Layer
@@ -240,11 +286,15 @@ See [RAILWAY_QUICK_REFERENCE.md](docs/RAILWAY_QUICK_REFERENCE.md) for common iss
 
 ## Documentation
 
-- [Railway Deployment Guide](railway-config/RAILWAY_DEPLOYMENT.md)
+### Railway Deployment
+1. **[Connect Services Guide](railway-config/CONNECT_SERVICES.md)** - How to connect GitHub repo to each service
+2. **[Deployment Guide](railway-config/DEPLOYMENT_GUIDE.md)** - Complete deployment walkthrough
+3. **[Variables Reference](railway-config/VARIABLES.md)** - All environment variables explained
+
+### Reference
 - [Railway Quick Reference](docs/RAILWAY_QUICK_REFERENCE.md)
 - [Migration Summary](docs/RAILWAY_MIGRATION_SUMMARY.md)
 - [Changelog](docs/CHANGELOG.md)
-- [Environment Variables](railway-config/VARIABLES.md)
 
 ## License
 
