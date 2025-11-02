@@ -240,15 +240,10 @@ EOF
 }
 
 write_repmgr_conf() {
-  # For conninfo libpq format: backslash and single-quote need escaping
-  # Reference: https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING
-  local escaped_password="${REPMGR_PASSWORD//\\/\\\\}"  # Escape backslash first
-  escaped_password="${escaped_password//\'/\\\'}"        # Then escape single quote with backslash
-  
   cat > "$REPMGR_CONF" <<EOF
 node_id=${NODE_ID}
 node_name='${NODE_NAME}'
-conninfo='host=${NODE_NAME} port=${PG_PORT} user=${REPMGR_USER} dbname=${REPMGR_DB} password=${escaped_password} connect_timeout=5'
+conninfo='host=${NODE_NAME} port=${PG_PORT} user=${REPMGR_USER} dbname=${REPMGR_DB} password=${REPMGR_PASSWORD} connect_timeout=5'
 data_directory='${PGDATA}'
 
 log_level=INFO
