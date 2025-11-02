@@ -14,6 +14,13 @@ IFS=$'\n\t'
 : "${PG_PORT:=5432}"
 : "${REPMGR_CONF:=/etc/repmgr/repmgr.conf}"
 : "${IS_WITNESS:=false}"
+
+# Debug: Check password length (don't print actual password!)
+if [ -n "${REPMGR_PASSWORD}" ]; then
+  echo "[DEBUG] REPMGR_PASSWORD is set (length: ${#REPMGR_PASSWORD} chars)"
+else
+  echo "[DEBUG] REPMGR_PASSWORD is EMPTY!"
+fi
 : "${PRIMARY_HINT:=pg-1}"
 : "${RETRY_INTERVAL:=5}"          # seconds between retries
 : "${RETRY_ROUNDS:=3}"          # total retries (180 * 5s ≈ 15 minutes)
@@ -233,10 +240,13 @@ EOF
 }
 
 write_repmgr_conf() {
+  # Escape single quotes in password for connection string
+  local escaped_password="${REPMGR_PASSWORD//\'/\'\'}"
+  
   cat > "$REPMGR_CONF" <<EOF
 node_id=${NODE_ID}
 node_name='${NODE_NAME}'
-conninfo='host=${NODE_NAME} port=${PG_PORT} user=${REPMGR_USER} dbname=${REPMGR_DB} password=${REPMGR_PASSWORD} connect_timeout=5'
+conninfo='host=${NODE_NAME} port=${PG_PORT} user=${REPMGR_USER} dbname=${REPMGR_DB} password='\''${escaped_password}'\'' connect_timeout=5'
 data_directory='${PGDATA}'
 
 log_level=INFO
