@@ -1,8 +1,0 @@
-[build]
-builder = "dockerfile"
-dockerfilePath = "Dockerfile"
-
-[deploy]
-startCommand = "/entrypoint.sh"
-restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 10
