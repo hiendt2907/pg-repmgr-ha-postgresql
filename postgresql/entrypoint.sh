@@ -98,6 +98,17 @@ is_primary() {
   gosu postgres psql -h "$host" -p "$port" -U "$REPMGR_USER" -d "$REPMGR_DB" -tAc "SELECT NOT pg_is_in_recovery();" 2>/dev/null | grep -q t
 }
 
+# Validate a primary spec string like "host:port" or "host" (port defaults to 5432)
+ensure_valid_primary() {
+  local primary="$1"
+  local host="${primary%:*}"
+  if [ -z "$host" ]; then
+    log "Invalid primary spec '$primary' (empty host)"
+    return 1
+  fi
+  return 0
+}
+
 # Dùng khi init cluster lần đầu
 find_primary() {
   IFS=',' read -ra peers <<<"$PEERS"
@@ -275,7 +286,7 @@ use_replication_slots=yes
 # Service control commands
 service_start_command='gosu postgres pg_ctl -D ${PGDATA} -w start'
 service_stop_command='gosu postgres pg_ctl -D ${PGDATA} -m fast stop'
-service_restart_command='gosu postgres pg_ctl -D ${PGDATA} -w restart -m fast'
+service_restart_command='/usr/local/bin/safe_restart.sh'
 service_reload_command='gosu postgres pg_ctl -D ${PGDATA} reload'
 
 # Monitoring - Optimized for <10s failover detection
@@ -401,6 +412,11 @@ clone_standby() {
   local primary="$1"
   local host=${primary%:*}
   local port=${primary#*:}
+  [ "$host" = "$port" ] && port=5432
+  if [ -z "$host" ]; then
+    log "Invalid primary spec '$primary' (empty host); refusing to clone"
+    return 1
+  fi
   log "Cloning standby from $host:$port"
 
   until wait_for_port "$host" "$port" 10; do sleep 2; done
@@ -429,6 +445,11 @@ attempt_rewind() {
   local primary="$1"
   local host=${primary%:*}
   local port=${primary#*:}
+  [ "$host" = "$port" ] && port=5432
+  if [ -z "$host" ]; then
+    log "Invalid primary spec '$primary' (empty host); aborting rewind"
+    return 1
+  fi
 
   log "Checking system identifier compatibility before rewind..."
   # Get system identifier from primary
@@ -511,7 +532,15 @@ if [ "$IS_WITNESS" = "true" ]; then
     primary_hostport="${lk_primary}:5432"
   else
     primary_hint_host=${PRIMARY_HINT%:*}
-    primary_hostport=$(find_primary || echo "${primary_hint_host}:5432")
+    primary_hint_host=${PRIMARY_HINT%:*}
+    tmp_primary=$(find_primary || true)
+    if [ -n "$tmp_primary" ]; then
+      primary_hostport="$tmp_primary"
+    elif [ -n "$primary_hint_host" ]; then
+      primary_hostport="${primary_hint_host}:5432"
+    else
+      primary_hostport=""
+    fi
 
     # Create repmgr role + database locally so repmgrd can start and witness register can use local metadata
     # Idempotent: only created if missing
@@ -523,9 +552,19 @@ if [ "$IS_WITNESS" = "true" ]; then
   fi
 
   log "Registering witness against ${primary_hostport%:*}"
-  # Retry until primary responds
+  log "Registering witness against ${primary_hostport%:*}"
+  # Retry until primary responds; dynamically re-discover if unknown
   for _ in $(seq 1 "$RETRY_ROUNDS"); do
-    if wait_for_port "${primary_hostport%:*}" "${primary_hostport#*:}" 5; then
+    if [ -z "$primary_hostport" ]; then
+      tmp_primary=$(find_primary || true)
+      if [ -n "$tmp_primary" ]; then
+        primary_hostport="$tmp_primary"
+        log "Witness discovered primary: $primary_hostport"
+      elif [ -n "$primary_hint_host" ]; then
+        primary_hostport="${primary_hint_host}:5432"
+      fi
+    fi
+    if [ -n "$primary_hostport" ] && wait_for_port "${primary_hostport%:*}" "${primary_hostport#*:}" 5; then
       gosu postgres repmgr -f "$REPMGR_CONF" witness register \
         -h "${primary_hostport%:*}" -p "${primary_hostport#*:}" \
         -U "$REPMGR_USER" -d "$REPMGR_DB" --force && break || true
@@ -646,8 +685,9 @@ else
               log "Bootstrapped this node as primary (last-known-primary, no-force)."
             else
               log "Primary register refused by metadata; will attempt to discover and follow instead"
-              current_primary=$(find_new_primary || true)
-              if [ -n "$current_primary" ]; then
+              current_primary=$(discover_primary_via_witness || true)
+              [ -z "$current_primary" ] && current_primary=$(find_new_primary || true)
+              if [ -n "$current_primary" ] && ensure_valid_primary "$current_primary"; then
                 if attempt_rewind "$current_primary"; then
                   gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
                   gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
@@ -662,7 +702,7 @@ else
                   sleep "$RETRY_INTERVAL"
                   current_primary=$(discover_primary_via_witness || true)
                   [ -z "$current_primary" ] && current_primary=$(find_new_primary || true)
-                  if [ -n "$current_primary" ]; then
+                  if [ -n "$current_primary" ] && ensure_valid_primary "$current_primary"; then
                     log "Primary discovered during wait: $current_primary"
                     if attempt_rewind "$current_primary"; then
                       gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
@@ -678,7 +718,7 @@ else
           fi
         else
           log "A primary appeared: $current_primary; will follow and rejoin"
-          if attempt_rewind "$current_primary"; then
+          if ensure_valid_primary "$current_primary" && attempt_rewind "$current_primary"; then
             gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
             gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
           else
@@ -691,7 +731,7 @@ else
         for i in $(seq 1 "$RETRY_ROUNDS"); do
           sleep "$RETRY_INTERVAL"
           # Prefer checking last-known-primary host first
-          if wait_for_port "$lk_primary" 5432 3 && is_primary "$lk_primary" 5432; then
+          if [ -n "$lk_primary" ] && wait_for_port "$lk_primary" 5432 3 && is_primary "$lk_primary" 5432; then
             current_primary="${lk_primary}:5432"
             log "Last-known-primary is now up as primary: $current_primary"
             break
@@ -701,7 +741,7 @@ else
           [ -n "$current_primary" ] && break
           log "Still waiting for last-known-primary '$lk_primary' or any primary..."
         done
-        if [ -n "$current_primary" ]; then
+        if [ -n "$current_primary" ] && ensure_valid_primary "$current_primary"; then
           # Rejoin/clone to the discovered primary
           if attempt_rewind "$current_primary"; then
             gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
@@ -716,7 +756,7 @@ else
           while true; do
             sleep "$RETRY_INTERVAL"
             current_primary=$(find_new_primary || true)
-            if [ -n "$current_primary" ]; then
+            if [ -n "$current_primary" ] && ensure_valid_primary "$current_primary"; then
               log "Primary discovered during wait: $current_primary"
               if attempt_rewind "$current_primary"; then
                 gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
@@ -738,7 +778,7 @@ else
         sleep "$RETRY_INTERVAL"
         # Try witness first
         current_primary=$(discover_primary_via_witness || true)
-        if [ -z "$current_primary" ] && wait_for_port "$hint_host" 5432 3 && is_primary "$hint_host" 5432; then
+        if [ -z "$current_primary" ] && [ -n "$hint_host" ] && wait_for_port "$hint_host" 5432 3 && is_primary "$hint_host" 5432; then
           current_primary="${hint_host}:5432"
           log "Hint primary is up: $current_primary"
           break
@@ -747,7 +787,7 @@ else
         [ -n "$current_primary" ] && break
         log "Waiting for PRIMARY_HINT '$hint_host' or any primary..."
       done
-      if [ -n "$current_primary" ]; then
+      if [ -n "$current_primary" ] && ensure_valid_primary "$current_primary"; then
         if attempt_rewind "$current_primary"; then
           gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
           gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
@@ -759,7 +799,7 @@ else
         while true; do
           sleep "$RETRY_INTERVAL"
           current_primary=$(find_new_primary || true)
-          if [ -n "$current_primary" ]; then
+          if [ -n "$current_primary" ] && ensure_valid_primary "$current_primary"; then
             log "Primary discovered during wait: $current_primary"
             if attempt_rewind "$current_primary"; then
               gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true

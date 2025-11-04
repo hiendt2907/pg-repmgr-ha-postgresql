@@ -12,6 +12,7 @@ RUN mkdir -p /etc/repmgr && chown postgres:postgres /etc/repmgr
 COPY postgresql/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY scripts/monitor.sh /usr/local/bin/monitor.sh
 COPY scripts/promote_guard.sh /usr/local/bin/promote_guard.sh
+COPY postgresql/safe_restart.sh /usr/local/bin/safe_restart.sh
 
 RUN chmod +x /usr/local/bin/*.sh
 
