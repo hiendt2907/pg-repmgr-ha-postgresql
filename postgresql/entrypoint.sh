@@ -168,12 +168,29 @@ discover_primary_via_witness() {
 
 # Get timeline ID from local PGDATA using pg_controldata (safe, server doesn't need to be running)
 get_local_timeline() {
+  # Prefer reading from pg_controldata (does not require server running)
   if [ ! -f "$PGDATA/global/pg_control" ]; then
-    log "Cannot find local pg_control file, assuming timeline 0"
+    log "Cannot find local pg_control file, assuming timeline 0" >&2
     echo "0"
     return
   fi
-  gosu postgres pg_controldata "$PGDATA" | grep "Latest checkpoint's TimeLineID" | awk '{print $5}'
+
+  local tli
+  # pg_controldata output format: "Latest checkpoint's TimeLineID:       1"
+  # We need to extract just the number after the colon
+  tli=$(gosu postgres pg_controldata "$PGDATA" 2>/dev/null | grep "Latest checkpoint's TimeLineID" | awk '{print $NF}' || true)
+
+  # Fallback to querying the running server if parsing failed
+  if ! [[ "$tli" =~ ^[0-9]+$ ]]; then
+    tli=$(gosu postgres psql -h localhost -p "$PG_PORT" -U "$POSTGRES_USER" -d postgres -tAc "SELECT timeline_id FROM pg_control_checkpoint();" 2>/dev/null || echo "")
+  fi
+
+  if ! [[ "$tli" =~ ^[0-9]+$ ]]; then
+    log "get_local_timeline: Unable to determine local timeline, defaulting to 0 (got '$tli')" >&2
+    echo "0"
+  else
+    echo "$tli"
+  fi
 }
 
 # Get timeline ID from a remote, running node
@@ -203,17 +220,16 @@ get_remote_timeline() {
 
 # Elect a primary from all peers based on the highest timeline ID
 elect_primary_by_timeline() {
-  log "Starting election based on timeline ID..."
+  log "Starting election based on timeline ID..." >&2
   
   local winner_node="$NODE_NAME"
   local max_timeline
   max_timeline=$(get_local_timeline)
-  log "Local timeline ID for $NODE_NAME is $max_timeline"
+  log "Local timeline ID for $NODE_NAME is $max_timeline" >&2
 
-  local peers_to_check
   # Ensure PEERS is not empty
   if [ -z "${PEERS:-}" ]; then
-      log "PEERS environment variable is not set. Cannot perform election."
+      log "PEERS environment variable is not set. Cannot perform election." >&2
       echo "$winner_node" # Fallback to self
       return
   fi
@@ -221,27 +237,65 @@ elect_primary_by_timeline() {
   IFS=',' read -ra peers_to_check <<<"$PEERS"
 
   for p in "${peers_to_check[@]}"; do
+    # Skip empty entries
+    [ -z "$p" ] && continue
+
     local host=${p%:*}; local port=${p#*:}; [ "$host" = "$port" ] && port=5432
+    # Skip if host is empty (bad PEERS formatting)
+    [ -z "$host" ] && continue
     
     # Don't check against self
     if [ "$host" = "$NODE_NAME" ]; then
       continue
     fi
 
-    log "Querying timeline ID from peer: $host"
+    log "Querying timeline ID from peer: $host" >&2
     local remote_timeline
     remote_timeline=$(get_remote_timeline "$host" "$port")
-    log "Peer $host timeline ID is $remote_timeline"
+    log "Peer $host timeline ID is $remote_timeline" >&2
+
+    # Ensure local max_timeline is numeric for comparison
+    if ! [[ "$max_timeline" =~ ^[0-9]+$ ]]; then max_timeline=0; fi
 
     if [ "$remote_timeline" -gt "$max_timeline" ]; then
-      log "New winner found: $host (timeline $remote_timeline > $max_timeline)"
+      log "New winner found: $host (timeline $remote_timeline > $max_timeline)" >&2
       max_timeline="$remote_timeline"
       winner_node="$host"
     fi
   done
 
-  log "Election winner is: $winner_node with timeline ID $max_timeline"
+  log "Election winner is: $winner_node with timeline ID $max_timeline" >&2
   echo "$winner_node"
+}
+
+# Elect the best peer (exclude self); returns empty string if none available
+elect_best_peer_by_timeline() {
+  # Ensure PEERS is not empty
+  if [ -z "${PEERS:-}" ]; then
+    echo ""
+    return
+  fi
+
+  IFS=',' read -ra peers_to_check <<<"$PEERS"
+  local peer_winner=""
+  local peer_max=0
+
+  for p in "${peers_to_check[@]}"; do
+    [ -z "$p" ] && continue
+    local host=${p%:*}; local port=${p#*:}; [ "$host" = "$port" ] && port=5432
+    [ -z "$host" ] && continue
+    [ "$host" = "$NODE_NAME" ] && continue
+
+    local rt
+    rt=$(get_remote_timeline "$host" "$port")
+    log "Peer $host has timeline $rt (peer election)" >&2
+    if [ "$rt" -gt "$peer_max" ]; then
+      peer_max="$rt"
+      peer_winner="$host"
+    fi
+  done
+
+  echo "$peer_winner"
 }
 
 write_postgresql_conf() {
@@ -690,70 +744,115 @@ if ! pgdata_has_db; then
   fi
 else
   # Node has previous data, indicating a restart or recovery scenario.
-  # Strict rule: only the last-known-primary with the highest timeline may bootstrap.
-  log "Node has existing data. Starting PostgreSQL to participate in election."
-  gosu postgres pg_ctl -D "$PGDATA" -w start
-
-  # Give peers a moment to also start up before holding the election.
-  # This grace period is crucial for all nodes to be ready for timeline queries.
-  log "Waiting for peers to come online before election... (15 seconds)"
-  sleep 15
-
-  election_winner=$(elect_primary_by_timeline)
+  # We need to distinguish between:
+  # 1. Cluster-wide outage (all nodes down) → election needed
+  # 2. Single standby restart (primary still running) → rejoin flow
+  
+  log "Node has existing data. Checking if primary is still alive..."
   lk_primary=$(read_last_primary)
-  log "Election concluded. Winner by timeline: '$election_winner'. Last known primary: '$lk_primary'."
-
-  # The winning condition is strict: a node must BOTH be the last known primary
-  # AND have the highest timeline ID to be able to bootstrap itself.
-  if [ "$NODE_NAME" = "$lk_primary" ] && [ "$NODE_NAME" = "$election_winner" ]; then
-    log "This node WON the election and was the Last Known Primary. Bootstrapping as primary."
-    # Use --force because we are certain this is the most up-to-date node.
-    if gosu postgres repmgr -f "$REPMGR_CONF" primary register --force; then
-        write_last_primary "$NODE_NAME"
-        log "Successfully registered as primary after winning election."
+  
+  # First, try to find if there's an existing primary running
+  existing_primary=$(find_new_primary || true)
+  
+  if [ -n "$existing_primary" ]; then
+    # Scenario: Primary is alive, this is just a standby restart
+    log "Detected running primary at '$existing_primary'. This is a standby restart, not cluster outage."
+    log "Following standard rejoin flow..."
+    
+    # Start local PG to check if we can rejoin
+    gosu postgres pg_ctl -D "$PGDATA" -w start
+    
+    # Try rewind first (faster), fall back to clone if needed
+    if attempt_rewind "$existing_primary"; then
+      log "Rejoining via repmgr node rejoin..."
+      gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind -h "${existing_primary%:*}" -p "${existing_primary#*:}" -U "$REPMGR_USER" -d "$REPMGR_DB" || true
+      gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
+      log "Successfully rejoined cluster as standby."
     else
-        log "CRITICAL: Won election but failed to register as primary. Check repmgr logs."
-        # Enter a waiting state to avoid causing more issues.
-        sleep infinity
+      log "pg_rewind failed. Falling back to full clone from primary '$existing_primary'."
+      clone_standby "$existing_primary"
     fi
   else
-    # This node lost the election or is not last-known-primary. It must follow the winner.
-    log "This node must follow the winner '$election_winner' (lk_primary='$lk_primary')."
-    gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true # Stop local PG to prepare for rewind/clone
+    # Scenario: No primary found, this is a cluster-wide outage
+    log "No running primary detected. Suspected cluster-wide outage."
+    log "Starting election-based recovery..."
+    
+    # Start PostgreSQL to participate in election
+    gosu postgres pg_ctl -D "$PGDATA" -w start
 
-    if [ -z "$election_winner" ]; then
-        log "CRITICAL: Election resulted in no winner. Cluster is in an inconsistent state. Halting."
-        sleep infinity
-    fi
+    # Give peers a moment to also start up before holding the election.
+    log "Waiting for peers to come online before election... (15 seconds)"
+    sleep 15
 
-    winner_hostport="${election_winner}:5432"
+    election_winner=$(elect_primary_by_timeline)
+    log "Election concluded. Winner by timeline: '$election_winner'. Last known primary: '$lk_primary'."
 
-    # Wait patiently for the winner to be promoted and become a primary.
-    log "Waiting for winner '$election_winner' to become primary..."
-    winner_is_primary=false
-    for i in $(seq 1 60); do # Wait up to 5 minutes
-        if wait_for_port "$election_winner" 5432 3 && is_primary "$election_winner" 5432; then
-            log "Winner '$election_winner' is now confirmed as primary."
-            winner_is_primary=true
-            break
-        fi
-        log "Still waiting for winner '$election_winner' to be promoted... (attempt $i/60)"
-        sleep 5
-    done
-
-    if [ "$winner_is_primary" = true ]; then
-      log "Proceeding to rejoin winner '$election_winner'."
-      if attempt_rewind "$winner_hostport"; then
-        gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
-        gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
-        log "Successfully rejoined cluster under new primary '$election_winner'."
+    # The winning condition is strict: a node must BOTH be the last known primary
+    # AND have the highest timeline ID to be able to bootstrap itself.
+    if [ "$NODE_NAME" = "$lk_primary" ] && [ "$NODE_NAME" = "$election_winner" ]; then
+      log "This node WON the election and was the Last Known Primary. Bootstrapping as primary."
+      # Use --force because we are certain this is the most up-to-date node.
+      if gosu postgres repmgr -f "$REPMGR_CONF" primary register --force; then
+          write_last_primary "$NODE_NAME"
+          log "Successfully registered as primary after winning election."
       else
-        log "pg_rewind failed. Falling back to full clone from winner '$election_winner'."
-        clone_standby "$winner_hostport"
+          log "CRITICAL: Won election but failed to register as primary. Check repmgr logs."
+          sleep infinity
       fi
     else
-      log "CRITICAL: Winner '$election_winner' did not become primary after extended wait. Cluster is in an inconsistent state. Halting."
-      sleep infinity
+      # This node lost the election or is not last-known-primary. It must follow the winner.
+      # Guard against the case where 'winner' == self but we're not allowed to promote (lk_primary mismatch).
+      if [ "$election_winner" = "$NODE_NAME" ]; then
+        peer_winner=$(elect_best_peer_by_timeline)
+        if [ -n "$peer_winner" ]; then
+          log "Election favors self but LKP mismatch; will follow best peer '$peer_winner' instead."
+          election_winner="$peer_winner"
+        else
+          log "No viable peer found to follow; waiting for a primary to appear."
+        fi
+      fi
+
+      log "This node must follow the winner '$election_winner' (lk_primary='$lk_primary')."
+
+      if [ -z "$election_winner" ]; then
+          log "CRITICAL: Election resulted in no winner. Cluster is in an inconsistent state. Halting."
+          sleep infinity
+      fi
+
+      winner_hostport="${election_winner}:5432"
+
+      # Stop local PG to prepare for rewind/clone only after we have a non-self winner
+      if [ "$election_winner" != "$NODE_NAME" ]; then
+        gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
+      fi
+
+      # Wait patiently for the winner to be promoted and become a primary.
+      log "Waiting for winner '$election_winner' to become primary..."
+      winner_is_primary=false
+      for i in $(seq 1 60); do # Wait up to 5 minutes
+          if wait_for_port "$election_winner" 5432 3 && is_primary "$election_winner" 5432; then
+              log "Winner '$election_winner' is now confirmed as primary."
+              winner_is_primary=true
+              break
+          fi
+          log "Still waiting for winner '$election_winner' to be promoted... (attempt $i/60)"
+          sleep 5
+      done
+
+      if [ "$winner_is_primary" = true ]; then
+        log "Proceeding to rejoin winner '$election_winner'."
+        if attempt_rewind "$winner_hostport"; then
+          gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
+          gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
+          log "Successfully rejoined cluster under new primary '$election_winner'."
+        else
+          log "pg_rewind failed. Falling back to full clone from winner '$election_winner'."
+          clone_standby "$winner_hostport"
+        fi
+      else
+        log "CRITICAL: Winner '$election_winner' did not become primary after extended wait. Cluster is in an inconsistent state. Halting."
+        sleep infinity
+      fi
     fi
   fi
 fi
