@@ -802,19 +802,32 @@ else
   
   log "Node has existing data. Checking cluster state..."
   lk_primary=$(read_last_primary)
+  log "Last known primary from file: '$lk_primary'"
   
   # Check if another primary exists BEFORE starting our local PG
+  log "Scanning network for existing primary nodes..."
   existing_primary=$(find_new_primary || true)
+  log "Network scan result: existing_primary='$existing_primary'"
+  
+  # If no primary found, re-check after short delay (network may be initializing)
+  if [ -z "$existing_primary" ]; then
+    log "No primary found on first scan. Retrying after 2 seconds..."
+    sleep 2
+    existing_primary=$(find_new_primary || true)
+    log "Second scan result: existing_primary='$existing_primary'"
+  fi
   
   # Start PostgreSQL to enable timeline checks and cluster participation
   log "Starting PostgreSQL to check node state and participate in recovery..."
   gosu postgres pg_ctl -D "$PGDATA" -w start
   
   # CRITICAL: Immediately check if we started as primary but shouldn't be
+  log "Checking local node role after startup..."
   i_am_primary=false
   if gosu postgres psql -h localhost -p "$PG_PORT" -U "$POSTGRES_USER" -d postgres -tAc "SELECT NOT pg_is_in_recovery();" 2>/dev/null | grep -q t; then
     i_am_primary=true
   fi
+  log "Local role check: i_am_primary=$i_am_primary, existing_primary='$existing_primary'"
   
   if [ -n "$existing_primary" ]; then
     # Another primary exists!
