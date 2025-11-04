@@ -25,6 +25,7 @@ fi
 : "${RETRY_INTERVAL:=5}"          # seconds between retries
 : "${RETRY_ROUNDS:=3}"          # total retries (180 * 5s ≈ 15 minutes)
 : "${LAST_PRIMARY_FILE:="$PGDATA/last_known_primary"}"
+: "${WITNESS_HOST:=}"
 
 # NODE_NAME and NODE_ID are REQUIRED (must be set via environment variables)
 if [ -z "${NODE_NAME:-}" ]; then
@@ -123,6 +124,28 @@ find_new_primary() {
       fi
     fi
   done
+  return 1
+}
+
+# Try to discover primary via witness's repmgr metadata (if WITNESS_HOST provided)
+discover_primary_via_witness() {
+  if [ -z "$WITNESS_HOST" ]; then return 1; fi
+  local csv
+  csv=$(gosu postgres repmgr -h "$WITNESS_HOST" -p 5432 -U "$REPMGR_USER" -d "$REPMGR_DB" -f "$REPMGR_CONF" cluster show --csv 2>/dev/null || true)
+  if [ -z "$csv" ]; then return 1; fi
+  # Prefer robust parse: role may be shown as text 'primary' or code 0 depending on version; match both
+  # CSV expected columns: node_id,role,status,... or node_id,role_code,status_code
+  local line
+  line=$(echo "$csv" | grep -Ei ",primary,|,[[:space:]]*0,[[:space:]]*1" | head -n1 || true)
+  if [ -z "$line" ]; then return 1; fi
+  # Extract node name (second or appropriate field). Fallback: try cut -d, -f2 if it's node_name.
+  # If schema differs, attempt to find a hostname pattern like stg-*.railway.internal in the row.
+  local host
+  host=$(echo "$line" | cut -d, -f2 | tr -d ' ')
+  if [ -n "$host" ]; then
+    printf "%s:5432\n" "$host"
+    return 0
+  fi
   return 1
 }
 
@@ -587,24 +610,72 @@ else
     if [ -n "$lk_primary" ]; then
       log "No reachable primary; last-known-primary is '$lk_primary'"
       if [ "$NODE_NAME" = "$lk_primary" ]; then
-        log "This node is the last-known-primary → checking if should bootstrap immediately"
-        
-        # Quick check if any other node is becoming primary (wait max 10s)
+        log "This node is the last-known-primary → extended checks before bootstrap"
+
+        # Extended grace period to avoid split-brain (up to 60s)
         current_primary=""
-        for i in $(seq 1 2); do
+        for i in $(seq 1 12); do
           sleep 5
-          current_primary=$(find_new_primary || true)
+          # Prefer witness view if available
+          current_primary=$(discover_primary_via_witness || true)
+          if [ -z "$current_primary" ]; then
+            current_primary=$(find_new_primary || true)
+          fi
           [ -n "$current_primary" ] && break
-          log "Quick check: no other primary found (attempt $i/2)"
+          log "Waiting for primary discovery (attempt $i/12)"
         done
-        
+
         if [ -z "$current_primary" ]; then
-          # No other primary after quick check → bootstrap immediately
-          log "No other primary detected → bootstrapping as primary now"
+          log "No other primary discovered after grace period → attempting controlled bootstrap"
           gosu postgres pg_ctl -D "$PGDATA" -w start
-          gosu postgres repmgr -f "$REPMGR_CONF" primary register --force
-          write_last_primary "$NODE_NAME"
-          log "Bootstrapped this node as primary (last-known-primary)."
+          # Final pre-flight check: ask witness one more time
+          final_primary=$(discover_primary_via_witness || true)
+          if [ -n "$final_primary" ]; then
+            log "Primary just appeared via witness: $final_primary; abort bootstrap and follow"
+            gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
+            if attempt_rewind "$final_primary"; then
+              gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
+              gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
+            else
+              clone_standby "$final_primary"
+            fi
+          else
+            # Register as primary WITHOUT --force to avoid overriding existing metadata
+            if gosu postgres repmgr -f "$REPMGR_CONF" primary register; then
+              write_last_primary "$NODE_NAME"
+              log "Bootstrapped this node as primary (last-known-primary, no-force)."
+            else
+              log "Primary register refused by metadata; will attempt to discover and follow instead"
+              current_primary=$(find_new_primary || true)
+              if [ -n "$current_primary" ]; then
+                if attempt_rewind "$current_primary"; then
+                  gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
+                  gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
+                else
+                  clone_standby "$current_primary"
+                fi
+              else
+                log "Still no primary; keeping PostgreSQL stopped to avoid split-brain"
+                gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
+                # Enter wait loop until a primary appears
+                while true; do
+                  sleep "$RETRY_INTERVAL"
+                  current_primary=$(discover_primary_via_witness || true)
+                  [ -z "$current_primary" ] && current_primary=$(find_new_primary || true)
+                  if [ -n "$current_primary" ]; then
+                    log "Primary discovered during wait: $current_primary"
+                    if attempt_rewind "$current_primary"; then
+                      gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
+                      gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
+                    else
+                      clone_standby "$current_primary"
+                    fi
+                    break
+                  fi
+                done
+              fi
+            fi
+          fi
         else
           log "A primary appeared: $current_primary; will follow and rejoin"
           if attempt_rewind "$current_primary"; then
@@ -659,13 +730,15 @@ else
         fi
       fi
     else
-      # No last-known-primary recorded; fall back to PRIMARY_HINT
+  # No last-known-primary recorded; fall back to PRIMARY_HINT (but prefer witness discovery if available)
       log "No last-known-primary recorded; falling back to PRIMARY_HINT='${PRIMARY_HINT}'"
       hint_host=${PRIMARY_HINT%:*}
       # Wait for hint host to come up as primary
       for i in $(seq 1 "$RETRY_ROUNDS"); do
         sleep "$RETRY_INTERVAL"
-        if wait_for_port "$hint_host" 5432 3 && is_primary "$hint_host" 5432; then
+        # Try witness first
+        current_primary=$(discover_primary_via_witness || true)
+        if [ -z "$current_primary" ] && wait_for_port "$hint_host" 5432 3 && is_primary "$hint_host" 5432; then
           current_primary="${hint_host}:5432"
           log "Hint primary is up: $current_primary"
           break
