@@ -798,57 +798,86 @@ else
   # We need to distinguish between:
   # 1. Cluster-wide outage (all nodes down) → election needed
   # 2. Single standby restart (primary still running) → rejoin flow
+  # 3. OLD PRIMARY restart (after failover) → MUST demote and follow new primary
   
-  log "Node has existing data. Checking if primary is still alive..."
+  log "Node has existing data. Checking cluster state..."
   lk_primary=$(read_last_primary)
   
-  # First, try to find if there's an existing primary running
+  # Check if another primary exists BEFORE starting our local PG
   existing_primary=$(find_new_primary || true)
   
+  # Start PostgreSQL to enable timeline checks and cluster participation
+  log "Starting PostgreSQL to check node state and participate in recovery..."
+  gosu postgres pg_ctl -D "$PGDATA" -w start
+  
+  # CRITICAL: Immediately check if we started as primary but shouldn't be
+  local i_am_primary=false
+  if gosu postgres psql -h localhost -p "$PG_PORT" -U "$POSTGRES_USER" -d postgres -tAc "SELECT NOT pg_is_in_recovery();" 2>/dev/null | grep -q t; then
+    i_am_primary=true
+  fi
+  
   if [ -n "$existing_primary" ]; then
-    # Scenario: Primary is alive, this is just a standby restart
-    log "Detected running primary at '$existing_primary'. This is a standby restart, not cluster outage."
-    log "Following standard rejoin flow..."
-    
-    # Wait for primary to be fully ready before attempting rewind
-    log "Ensuring primary is fully ready before rejoin attempt..."
-    local primary_host="${existing_primary%:*}"
-    local primary_port="${existing_primary#*:}"
-    [ "$primary_host" = "$primary_port" ] && primary_port=5432
-    
-    local ready_count=0
-    for i in $(seq 1 30); do
-      if wait_for_port "$primary_host" "$primary_port" 3 && is_primary "$primary_host" "$primary_port"; then
-        ready_count=$((ready_count + 1))
-        if [ "$ready_count" -ge 3 ]; then
-          log "Primary is confirmed ready (3 consecutive checks passed)"
-          break
-        fi
-      else
-        ready_count=0
-      fi
-      if [ $i -lt 30 ]; then
-        log "Waiting for primary to stabilize... (attempt $i/30)"
-        sleep 2
-      fi
-    done
-    
-    if [ "$ready_count" -lt 3 ]; then
-      log "WARNING: Primary not fully stable after 60s, proceeding anyway..."
-    fi
-    
-    # Start local PG to check if we can rejoin
-    gosu postgres pg_ctl -D "$PGDATA" -w start
-    
-    # Try rewind first (faster), fall back to clone if needed
-    if attempt_rewind "$existing_primary"; then
-      log "Rejoining via repmgr node rejoin..."
-      gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind -h "${primary_host}" -p "${primary_port}" -U "$REPMGR_USER" -d "$REPMGR_DB" || true
-      gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
-      log "Successfully rejoined cluster as standby."
+    # Another primary exists!
+    if [ "$i_am_primary" = true ]; then
+      # CRITICAL: We started as primary but another primary exists → SPLIT-BRAIN!
+      log "═══════════════════════════════════════════════════════════"
+      log "🔴 SPLIT-BRAIN DETECTED!"
+      log "  This node: PRIMARY (just started)"
+      log "  Other node: $existing_primary is also PRIMARY"
+      log "  Action: DEMOTING this node immediately to prevent data corruption"
+      log "═══════════════════════════════════════════════════════════"
+      
+      # Stop PostgreSQL immediately
+      gosu postgres pg_ctl -D "$PGDATA" -m fast stop
+      
+      # Create standby.signal to force standby mode
+      touch "$PGDATA/standby.signal"
+      chown postgres:postgres "$PGDATA/standby.signal"
+      
+      # Configure replication from the actual primary
+      local primary_host="${existing_primary%:*}"
+      local primary_port="${existing_primary#*:}"
+      [ "$primary_host" = "$primary_port" ] && primary_port=5432
+      
+      cat > "$PGDATA/postgresql.auto.conf" <<-AUTOCONF
+# Auto-generated for split-brain prevention (old primary demotion)
+primary_conninfo = 'host=$primary_host port=$primary_port user=$REPMGR_USER dbname=$REPMGR_DB password=$REPMGR_PASSWORD application_name=$NODE_NAME'
+primary_slot_name = 'repmgr_slot_${NODE_ID}'
+AUTOCONF
+      chown postgres:postgres "$PGDATA/postgresql.auto.conf"
+      
+      # Restart as standby
+      log "Restarting PostgreSQL in STANDBY mode..."
+      gosu postgres pg_ctl -D "$PGDATA" -w start
+      
+      # Wait for replication to establish
+      sleep 5
+      
+      # Register as standby
+      log "Registering demoted node as standby..."
+      gosu postgres repmgr -f "$REPMGR_CONF" standby register --force -h "$primary_host" -p "$primary_port" -U "$REPMGR_USER" -d "$REPMGR_DB" || true
+      
+      write_last_primary "$primary_host"
+      log "✅ Split-brain resolved: old primary demoted to standby"
+      
     else
-      log "pg_rewind failed. Falling back to full clone from primary '$existing_primary'."
-      clone_standby "$existing_primary"
+      # We are standby, another primary exists → normal rejoin
+      log "This node is standby, detected primary at '$existing_primary' → standard rejoin flow"
+      
+      local primary_host="${existing_primary%:*}"
+      local primary_port="${existing_primary#*:}"
+      [ "$primary_host" = "$primary_port" ] && primary_port=5432
+      
+      # Try rewind first
+      if attempt_rewind "$existing_primary"; then
+        log "Rejoining via repmgr node rejoin..."
+        gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind -h "${primary_host}" -p "${primary_port}" -U "$REPMGR_USER" -d "$REPMGR_DB" || true
+        gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
+        log "Successfully rejoined cluster as standby."
+      else
+        log "pg_rewind failed. Falling back to full clone."
+        clone_standby "$existing_primary"
+      fi
     fi
   else
     # Scenario: No primary found, this is a cluster-wide outage
