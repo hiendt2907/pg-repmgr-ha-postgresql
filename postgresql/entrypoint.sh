@@ -897,8 +897,8 @@ AUTOCONF
     log "No running primary detected. Suspected cluster-wide outage."
     log "Starting election-based recovery..."
     
-    # Start PostgreSQL to participate in election
-    gosu postgres pg_ctl -D "$PGDATA" -w start
+    # PostgreSQL already started above (line ~810), no need to start again
+    # Just wait for peers to come online before holding election
 
     # Give peers a moment to also start up before holding the election.
     log "Waiting for peers to come online before election... (15 seconds)"
