@@ -497,6 +497,26 @@ wait_for_metadata() {
   return 1
 }
 
+# Wait for a given primary host:port to be ready and confirmed as primary
+wait_for_primary_ready() {
+  local primary_spec="$1"
+  local timeout=${2:-60}
+  local host port
+  host=${primary_spec%:*}
+  port=${primary_spec#*:}
+  [ "$host" = "$port" ] && port=5432
+
+  for _ in $(seq 1 "$timeout"); do
+    if wait_for_port "$host" "$port" 3 && is_primary "$host" "$port"; then
+      log "Confirmed primary $host:$port is ready"
+      return 0
+    fi
+    sleep 1
+  done
+  log "Timeout waiting for primary $primary_spec to be ready"
+  return 1
+}
+
 init_primary() {
   log "Initializing primary (fresh PGDATA)..."
   safe_clear_pgdata
@@ -974,6 +994,17 @@ AUTOCONF
         sleep infinity
       fi
     fi
+  fi
+fi
+
+# Before starting repmgrd, prefer to wait for the last-known-primary to be ready
+lkp_val="$(read_last_primary)"
+if [ -n "$lkp_val" ] && [ "$lkp_val" != "$NODE_NAME" ]; then
+  log "Last-known-primary is '$lkp_val' — waiting up to 60s for it to be confirmed before starting repmgrd"
+  if wait_for_primary_ready "$lkp_val" 60; then
+    log "Primary confirmed; proceeding to start repmgrd"
+  else
+    log "Primary not confirmed within timeout; starting repmgrd anyway to avoid further delays"
   fi
 fi
 
