@@ -811,7 +811,7 @@ else
   gosu postgres pg_ctl -D "$PGDATA" -w start
   
   # CRITICAL: Immediately check if we started as primary but shouldn't be
-  local i_am_primary=false
+  i_am_primary=false
   if gosu postgres psql -h localhost -p "$PG_PORT" -U "$POSTGRES_USER" -d postgres -tAc "SELECT NOT pg_is_in_recovery();" 2>/dev/null | grep -q t; then
     i_am_primary=true
   fi
@@ -835,8 +835,8 @@ else
       chown postgres:postgres "$PGDATA/standby.signal"
       
       # Configure replication from the actual primary
-      local primary_host="${existing_primary%:*}"
-      local primary_port="${existing_primary#*:}"
+      primary_host="${existing_primary%:*}"
+      primary_port="${existing_primary#*:}"
       [ "$primary_host" = "$primary_port" ] && primary_port=5432
       
       cat > "$PGDATA/postgresql.auto.conf" <<-AUTOCONF
@@ -864,8 +864,8 @@ AUTOCONF
       # We are standby, another primary exists → normal rejoin
       log "This node is standby, detected primary at '$existing_primary' → standard rejoin flow"
       
-      local primary_host="${existing_primary%:*}"
-      local primary_port="${existing_primary#*:}"
+      primary_host="${existing_primary%:*}"
+      primary_port="${existing_primary#*:}"
       [ "$primary_host" = "$primary_port" ] && primary_port=5432
       
       # Try rewind first
