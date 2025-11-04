@@ -1,6 +1,6 @@
 services:
   pg-1:
-    build: .
+    build: ./postgresql
     container_name: pg-1
     environment:
       - NODE_NAME=pg-1
@@ -14,11 +14,17 @@ services:
       - pg-1_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "gosu postgres pg_isready -h localhost -p 5432 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     labels:
       - cluster=pg_ha_cluster
 
   pg-2:
-    build: .
+    build: ./postgresql
     container_name: pg-2
     environment:
       - NODE_NAME=pg-2
@@ -30,13 +36,20 @@ services:
       - PEERS=pg-1,pg-3
     volumes:
       - pg-2_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "gosu postgres pg_isready -h localhost -p 5432 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
-      - pg-1
+      pg-1:
+        condition: service_healthy
     labels:
       - cluster=pg_ha_cluster
 
   pg-3:
-    build: .
+    build: ./postgresql
     container_name: pg-3
     environment:
       - NODE_NAME=pg-3
@@ -48,13 +61,19 @@ services:
       - PEERS=pg-1,pg-2
     volumes:
       - pg-3_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "gosu postgres pg_isready -h localhost -p 5432 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
-      - pg-1
+      pg-1:
+        condition: service_healthy
     labels:
       - cluster=pg_ha_cluster
 
   pg-4:
-    build: .
+    build: ./postgresql
     container_name: pg-4
     environment:
       - NODE_NAME=pg-4
@@ -66,13 +85,19 @@ services:
       - PEERS=pg-1,pg-2
     volumes:
       - pg-4_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "gosu postgres pg_isready -h localhost -p 5432 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
-      - pg-1
+      pg-1:
+        condition: service_healthy
     labels:
       - cluster=pg_ha_cluster
 
   witness:
-    build: .
+    build: ./postgresql
     container_name: witness
     environment:
       - NODE_NAME=witness
@@ -84,6 +109,12 @@ services:
       - PEERS=pg-1,pg-2,pg-3
       - APP_READONLY_PASSWORD=${APP_READONLY_PASSWORD}
       - APP_READWRITE_PASSWORD=${APP_READWRITE_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "gosu postgres pg_isready -h localhost -p 5432 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
     # witness không cần volume data vì không chạy postgres cluster
     labels:
       - cluster=pg_ha_cluster

@@ -124,8 +124,29 @@ chown postgres:postgres /var/lib/postgresql/.pcppass
 chmod 600 /var/lib/postgresql/.pcppass
 echo "[$(date)] Created .pcppass file"
 
+# Also provide .pcppass for root (monitor runs as root)
+echo "localhost:9898:admin:$PCP_PASSWORD" > /root/.pcppass
+chmod 600 /root/.pcppass
+
 # Update pgpool.conf with runtime values
 echo "[$(date)] Configuring pgpool.conf with runtime values..."
+
+# Optionally harden client CIDRs if PGPOOL_CLIENT_CIDRS is provided (comma-separated)
+if [ -n "${PGPOOL_CLIENT_CIDRS:-}" ]; then
+  echo "[$(date)] Applying client CIDR restrictions to pool_hba.conf: ${PGPOOL_CLIENT_CIDRS}"
+  # Comment out overly permissive defaults
+  sed -i "s/^host\s\+all\s\+all\s\+0\.0\.0\.0\/0\s\+scram-sha-256/# &/" /etc/pgpool-II/pool_hba.conf || true
+  sed -i "s/^host\s\+all\s\+all\s\+::\/0\s\+scram-sha-256/# &/" /etc/pgpool-II/pool_hba.conf || true
+  # Also comment docker-wide 172.0.0.0/8 template if present
+  sed -i "s/^host\s\+all\s\+all\s\+172\.0\.0\.0\/8\s\+scram-sha-256/# &/" /etc/pgpool-II/pool_hba.conf || true
+  # Append explicit allowed CIDRs
+  IFS=',' read -ra CIDRS_ARR <<<"$PGPOOL_CLIENT_CIDRS"
+  for cidr in "${CIDRS_ARR[@]}"; do
+    cidr_trimmed=$(echo "$cidr" | xargs)
+    [ -z "$cidr_trimmed" ] && continue
+    echo "host    all         all         ${cidr_trimmed}         scram-sha-256" >> /etc/pgpool-II/pool_hba.conf
+  done
+fi
 
 # Set watchdog hostname and priority based on node ID
 
@@ -166,6 +187,10 @@ sed -i "s/^wd_lifecheck_password = .*/wd_lifecheck_password = '${REPMGR_PASSWORD
 echo "[$(date)] Discovering current primary in cluster..."
 
 # Backends list can be provided via PG_BACKENDS env var (comma-separated hostname[:port])
+# Fallback: if PG_BACKENDS is empty but PG_NODES (hostnames only) is provided, assume port 5432
+if [ -z "${PG_BACKENDS:-}" ] && [ -n "${PG_NODES:-}" ]; then
+  PG_BACKENDS=$(echo "$PG_NODES" | awk -v RS=',' -v ORS=',' '{gsub(/^[\t ]+|[\t ]+$/,"",$0); printf "%s:5432", $0}' | sed 's/,$//')
+fi
 PG_BACKENDS=${PG_BACKENDS:-"pg-1:5432,pg-2:5432,pg-3:5432,pg-4:5432"}
 
 # Generate backend entries in pgpool.conf dynamically from PG_BACKENDS
@@ -350,9 +375,13 @@ fi
 # For SCRAM-SHA-256, pgpool needs to query backend, so we use text format
 echo "[$(date)] Creating pool_passwd with text format for SCRAM-SHA-256..."
 
+# Ensure runtime directory for pool_passwd matches pgpool.conf
+mkdir -p /run/pgpool
+chown postgres:postgres /run/pgpool
+
 # Create pool_passwd in text format (username:password)
 # Pgpool will handle SCRAM authentication with backends
-cat > /etc/pgpool-II/pool_passwd <<EOF
+cat > /run/pgpool/pool_passwd <<EOF
 postgres:$POSTGRES_PASSWORD
 repmgr:$REPMGR_PASSWORD
 app_readonly:$APP_READONLY_PASSWORD
@@ -360,12 +389,12 @@ app_readwrite:$APP_READWRITE_PASSWORD
 pgpool:$REPMGR_PASSWORD
 EOF
 
-chmod 600 /etc/pgpool-II/pool_passwd
-echo "[$(date)] pool_passwd created with $(wc -l < /etc/pgpool-II/pool_passwd) users"
+chmod 600 /run/pgpool/pool_passwd
+chown postgres:postgres /run/pgpool/pool_passwd
+echo "[$(date)] pool_passwd created with $(wc -l < /run/pgpool/pool_passwd) users"
 
-# Set correct permissions
+# Set correct permissions for config files
 chown postgres:postgres /etc/pgpool-II/*
-chmod 600 /etc/pgpool-II/pool_passwd
 chmod 600 /etc/pgpool-II/pcp.conf
 
 # Create pgpool user in PostgreSQL if not exists (on primary node)
@@ -385,14 +414,15 @@ EOSQL
 
 echo "[$(date)] Pgpool user created/verified on $PRIMARY_NODE"
 
-# Test backend connections
+# Test backend connections (from PG_BACKENDS)
 echo "[$(date)] Testing backend connections..."
-for backend in pg-1 pg-2 pg-3 pg-4; do
-    if PGPASSWORD=$REPMGR_PASSWORD psql -h $backend -U repmgr -d postgres -c "SELECT 1" > /dev/null 2>&1; then
-        echo "  ✓ $backend is reachable"
-    else
-        echo "  ✗ $backend is NOT reachable (may come online later)"
-    fi
+for be in "${BACKENDS_ARRAY[@]}"; do
+  host=$(echo "$be" | cut -d: -f1)
+  if PGPASSWORD="$REPMGR_PASSWORD" psql -h "$host" -U repmgr -d postgres -tAc "SELECT 1" > /dev/null 2>&1; then
+    echo "  ✓ $host is reachable"
+  else
+    echo "  ✗ $host is NOT reachable (may come online later)"
+  fi
 done
 
 # Wait for backends to accept connections (prevent pgpool starting before standbys finish clone)
@@ -443,10 +473,14 @@ echo "  Watchdog Priority: $PGPOOL_NODE_ID"
 echo "  Other Pgpool: ${OTHER_PGPOOL_HOSTNAME}:${OTHER_PGPOOL_PORT}"
 echo ""
 echo "  Backend Configuration:"
-echo "    pg-1 (Primary):  weight=0 (writes only)"
-echo "    pg-2 (Standby):  weight=1 (reads)"
-echo "    pg-3 (Standby):  weight=1 (reads)"
-echo "    pg-4 (Standby):  weight=1 (reads)"
+for be in "${BACKENDS_ARRAY[@]}"; do
+  host=$(echo "$be" | cut -d: -f1)
+  if [ "$host" = "$PRIMARY_NODE" ]; then
+    echo "    $host (Primary):  weight=0 (writes only)"
+  else
+    echo "    $host (Standby):  weight=1 (reads)"
+  fi
+done
 echo ""
 echo "  Features:"
 echo "    ✓ Load Balancing: ON (session-level; writes pinned to primary)"
@@ -466,9 +500,9 @@ echo ""
 
 # Start monitoring script in background if exists
 if [ -f /usr/local/bin/monitor.sh ]; then
-  echo "[$(date)] Starting monitoring script..."
-  # Provide PGPASSWORD to the monitor so it can run psql checks against pgpool
-  PGPASSWORD="${POSTGRES_PASSWORD}" /usr/local/bin/monitor.sh &
+  echo "[$(date)] Starting monitoring script (with dynamic backends)..."
+  # Provide both pgpool and backend credentials
+  PGPASSWORD="${POSTGRES_PASSWORD}" REPMGR_PASSWORD="${REPMGR_PASSWORD}" /usr/local/bin/monitor.sh &
 fi
 
 # Clean up any stale pid file and kill any running pgpool processes

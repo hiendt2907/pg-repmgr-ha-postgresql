@@ -406,12 +406,32 @@ attempt_rewind() {
   local primary="$1"
   local host=${primary%:*}
   local port=${primary#*:}
+
+  log "Checking system identifier compatibility before rewind..."
+  # Get system identifier from primary
+  local primary_sysid
+  primary_sysid=$(gosu postgres psql -h "$host" -p "$port" -U "$REPMGR_USER" -d "$REPMGR_DB" -tAc "SELECT system_identifier FROM pg_control_system();" 2>/dev/null || echo "")
+
+  # Get system identifier locally if possible (only when server is running)
+  local local_sysid=""
+  if gosu postgres pg_ctl -D "$PGDATA" status >/dev/null 2>&1; then
+    local_sysid=$(gosu postgres psql -h localhost -p "$PG_PORT" -U "$POSTGRES_USER" -d postgres -tAc "SELECT system_identifier FROM pg_control_system();" 2>/dev/null || echo "")
+  fi
+
+  if [ -n "$primary_sysid" ] && [ -n "$local_sysid" ] && [ "$primary_sysid" != "$local_sysid" ]; then
+    log "System identifier mismatch detected:"
+    log "  Primary: $primary_sysid"
+    log "  Local:   $local_sysid"
+    log "  → Skipping pg_rewind and forcing full clone"
+    return 1
+  fi
+
   log "Attempting pg_rewind from $host:$port"
   gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
   # Escape single quotes in password for connection string
   local escaped_password="${REPMGR_PASSWORD//\'/\'\'}"
   if gosu postgres pg_rewind --target-pgdata="$PGDATA" \
-      --source-server="host=$host port=$port user=$REPMGR_USER dbname=$REPMGR_DB password='${escaped_password}'"; then
+      --source-server="host=$host port=$port user=$REPMGR_USER dbname=$REPMGR_DB password='${escaped_password}'" --no-sync; then
     log "pg_rewind successful"
     gosu postgres pg_ctl -D "$PGDATA" -w start
     write_last_primary "$host"
