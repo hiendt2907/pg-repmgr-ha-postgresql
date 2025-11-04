@@ -532,7 +532,6 @@ if [ "$IS_WITNESS" = "true" ]; then
     primary_hostport="${lk_primary}:5432"
   else
     primary_hint_host=${PRIMARY_HINT%:*}
-    primary_hint_host=${PRIMARY_HINT%:*}
     tmp_primary=$(find_primary || true)
     if [ -n "$tmp_primary" ]; then
       primary_hostport="$tmp_primary"
@@ -551,7 +550,6 @@ if [ "$IS_WITNESS" = "true" ]; then
     log "Witness: ensured local repmgr role/db (user=${REPMGR_USER}, db=${REPMGR_DB})"
   fi
 
-  log "Registering witness against ${primary_hostport%:*}"
   log "Registering witness against ${primary_hostport%:*}"
   # Retry until primary responds; dynamically re-discover if unknown
   for _ in $(seq 1 "$RETRY_ROUNDS"); do
@@ -685,35 +683,27 @@ else
               log "Bootstrapped this node as primary (last-known-primary, no-force)."
             else
               log "Primary register refused by metadata; will attempt to discover and follow instead"
-              current_primary=$(discover_primary_via_witness || true)
-              [ -z "$current_primary" ] && current_primary=$(find_new_primary || true)
-              if [ -n "$current_primary" ] && ensure_valid_primary "$current_primary"; then
-                if attempt_rewind "$current_primary"; then
-                  gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
-                  gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
-                else
-                  clone_standby "$current_primary"
-                fi
-              else
-                log "Still no primary; keeping PostgreSQL stopped to avoid split-brain"
-                gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
-                # Enter wait loop until a primary appears
-                while true; do
-                  sleep "$RETRY_INTERVAL"
-                  current_primary=$(discover_primary_via_witness || true)
-                  [ -z "$current_primary" ] && current_primary=$(find_new_primary || true)
-                  if [ -n "$current_primary" ] && ensure_valid_primary "$current_primary"; then
-                    log "Primary discovered during wait: $current_primary"
-                    if attempt_rewind "$current_primary"; then
-                      gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
-                      gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
-                    else
-                      clone_standby "$current_primary"
-                    fi
-                    break
+              # Enter an infinite loop to patiently wait for a primary to appear.
+              # This is the key to preventing a "stuck" state after a full cluster restart.
+              while true; do
+                log "Waiting patiently for a valid primary to be confirmed by witness or peers..."
+                current_primary=$(discover_primary_via_witness || true)
+                [ -z "$current_primary" ] && current_primary=$(find_new_primary || true)
+
+                if [ -n "$current_primary" ] && ensure_valid_primary "$current_primary"; then
+                  log "A valid primary has been discovered: $current_primary. Attempting to follow."
+                  gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
+                  if attempt_rewind "$current_primary"; then
+                    gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
+                    gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
+                  else
+                    clone_standby "$current_primary"
                   fi
-                done
-              fi
+                  # Break the loop and proceed to start repmgrd
+                  break
+                fi
+                sleep "$RETRY_INTERVAL"
+              done
             fi
           fi
         else
