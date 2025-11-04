@@ -303,82 +303,99 @@ write_postgresql_conf() {
 # Network
 listen_addresses = '*'
 port = ${PG_PORT}
-max_connections = 1000            # Increased for high concurrency (from default 100)
+max_connections = 500             # Balanced for 16GB RAM
 
-# Replication - Optimized for fast failover (<10s)
+# Replication - Optimized for FASTEST replication with 8 vCores
 wal_level = replica
-max_wal_senders = 16              # Support more standbys + archiving
-wal_keep_size = '10GB'            # Increased to prevent WAL removal during lag spikes
-max_replication_slots = 16
+max_wal_senders = 10              # Sufficient for standbys + archiving
+wal_keep_size = '4GB'             # Reduced for faster cycling
+max_replication_slots = 10
 hot_standby = on
 hot_standby_feedback = on
 wal_log_hints = on
 shared_preload_libraries = 'repmgr'
 
-# WAL Performance - Critical for <10s failover
-wal_compression = on              # Compress WAL to reduce I/O
-wal_buffers = 64MB                # Increased from default 16MB
-max_wal_size = 8GB                # Allow larger WAL before checkpoint
-min_wal_size = 2GB
-checkpoint_timeout = 15min        # More frequent checkpoints (down from 30min)
+# WAL Performance - CRITICAL for fastest replication
+wal_compression = lz4             # Fast compression (requires lz4, fallback to on if unavailable)
+wal_buffers = 32MB                # Optimized for 16GB RAM
+max_wal_size = 4GB                # Smaller for faster checkpoints
+min_wal_size = 1GB
+checkpoint_timeout = 5min         # AGGRESSIVE: checkpoint every 5 minutes
 checkpoint_completion_target = 0.9
+wal_writer_delay = 10ms           # FASTEST: flush WAL every 10ms (down from 200ms default)
+wal_writer_flush_after = 128kB    # Flush small batches frequently
 
-# Synchronous replication - Ensure data integrity
-# Set to 'off' for async (faster writes), 'remote_write' for durability without flush wait
-# 'on' for strongest guarantee but slower writes
+# Synchronous replication - FASTEST mode with durability
 synchronous_commit = remote_write  # Wait for WAL write to standby, not fsync (balanced)
-# synchronous_standby_names = 'FIRST 1 (pg-2, pg-3, pg-4)'  # Uncomment for sync replication
+# For ABSOLUTE FASTEST (risk of data loss on crash): synchronous_commit = local
+# For STRONGEST guarantee (slower): synchronous_commit = on
+# synchronous_standby_names = 'FIRST 1 (stg-pg-2, stg-pg-3)'  # Uncomment for sync replication
 
-# Logging - Minimal for normal operation, errors only
+# Archive mode - Disabled for speed (enable if you need PITR)
+archive_mode = off
+# archive_command = '/bin/true'   # Replace with real archive command if needed
+
+# Logging - Minimal for performance
 log_connections = off
 log_disconnections = off
 log_line_prefix = '%t [%p]: '
 log_statement = 'none'
-log_min_duration_statement = 5000
+log_min_duration_statement = 10000  # Log queries > 10s only
 log_min_error_statement = error
 log_min_messages = warning
 log_checkpoints = on
 log_lock_waits = on
-log_autovacuum_min_duration = 0
-log_replication_commands = on     # Log replication events for failover debugging
+log_autovacuum_min_duration = 5000
+log_replication_commands = on
 
-# Password Encryption (SCRAM-SHA-256 is more secure than md5)
+# Password Encryption
 password_encryption = 'scram-sha-256'
 
-# SSL/TLS (if certificates exist)
+# SSL/TLS (disabled for speed in internal network)
 ssl = off
-# ssl_cert_file = 'server.crt'
-# ssl_key_file = 'server.key'
-# ssl_ca_file = 'root.crt'
 
-# Performance - Tuned for 32 vCPU / 32 GB RAM
-shared_buffers = 8GB              # 25% of RAM (up from 256MB)
-work_mem = 64MB                   # Per-operation memory (up from 16MB)
-maintenance_work_mem = 2GB        # For VACUUM, CREATE INDEX (up from 128MB)
-effective_cache_size = 24GB       # 75% of RAM for query planner estimates
+# Performance - Tuned for 8 vCPU / 16 GB RAM
+shared_buffers = 4GB              # 25% of RAM (down from 8GB for 16GB)
+work_mem = 32MB                   # Per-operation memory (8 vCPU can handle this)
+maintenance_work_mem = 1GB        # For VACUUM, CREATE INDEX
+effective_cache_size = 12GB       # 75% of RAM for query planner
 effective_io_concurrency = 200    # For SSD/NVMe
 random_page_cost = 1.1            # SSD-optimized
 
-# Parallel query execution (leverage 32 vCPUs)
-max_worker_processes = 32         # Match vCPU count
-max_parallel_workers_per_gather = 8  # Per query parallelism
-max_parallel_workers = 32         # Total parallel workers
-max_parallel_maintenance_workers = 8 # For parallel CREATE INDEX, VACUUM
+# Parallel query execution (leverage 8 vCPUs)
+max_worker_processes = 8          # Match vCPU count
+max_parallel_workers_per_gather = 4  # Per query parallelism
+max_parallel_workers = 8          # Total parallel workers
+max_parallel_maintenance_workers = 4 # For parallel CREATE INDEX, VACUUM
 
 # Autovacuum - Aggressive for high-write workloads
 autovacuum = on
-autovacuum_max_workers = 8        # More workers for 32 vCPU
-autovacuum_naptime = 10s          # Check more frequently (down from 1min)
-autovacuum_vacuum_scale_factor = 0.05     # Vacuum when 5% of table is dead (down from 20%)
-autovacuum_analyze_scale_factor = 0.025   # Analyze when 2.5% changed
+autovacuum_max_workers = 4        # Half of vCPUs
+autovacuum_naptime = 10s          # Check frequently
+autovacuum_vacuum_scale_factor = 0.05
+autovacuum_analyze_scale_factor = 0.025
 
 # Connection management
-tcp_keepalives_idle = 60          # Send keepalive after 60s idle
-tcp_keepalives_interval = 10      # Retry every 10s
-tcp_keepalives_count = 6          # Drop after 6 failed keepalives
+tcp_keepalives_idle = 30          # Faster detection (down from 60s)
+tcp_keepalives_interval = 10
+tcp_keepalives_count = 3          # Drop faster (down from 6)
 
-# Statement timeout (prevent runaway queries)
-statement_timeout = 300000
+# Statement timeout
+statement_timeout = 300000        # 5 minutes
+
+# WAL receiver tuning for FAST standby apply
+wal_receiver_status_interval = 1  # Report status every 1s (down from 10s)
+wal_receiver_timeout = 30000      # 30s timeout (down from 60s)
+wal_retrieve_retry_interval = 1000  # Retry every 1s (down from 5s)
+
+# Hot standby feedback for reduced conflicts
+hot_standby_feedback = on
+max_standby_streaming_delay = 10s  # AGGRESSIVE: cancel conflicting queries after 10s
+
+# Background writer tuning for write-heavy workload
+bgwriter_delay = 50ms             # Wake up more frequently (down from 200ms)
+bgwriter_lru_maxpages = 200       # More aggressive background writes
+bgwriter_lru_multiplier = 4.0     # Anticipate more dirty buffers
 EOF
 }
 
@@ -589,6 +606,13 @@ attempt_rewind() {
     return 1
   fi
 
+  # Ensure primary is reachable before attempting rewind
+  log "Verifying primary connectivity before rewind..."
+  if ! wait_for_port "$host" "$port" 10; then
+    log "Primary $host:$port is not reachable. Aborting rewind."
+    return 1
+  fi
+
   log "Checking system identifier compatibility before rewind..."
   # Get system identifier from primary
   local primary_sysid
@@ -610,16 +634,43 @@ attempt_rewind() {
 
   log "Attempting pg_rewind from $host:$port"
   gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
+  
+  # Wait a moment for clean shutdown
+  sleep 2
+  
   # Escape single quotes in password for connection string
   local escaped_password="${REPMGR_PASSWORD//\'/\'\'}"
-  if gosu postgres pg_rewind --target-pgdata="$PGDATA" \
-      --source-server="host=$host port=$port user=$REPMGR_USER dbname=$REPMGR_DB password='${escaped_password}'" --no-sync; then
-    log "pg_rewind successful"
+  
+  # Retry pg_rewind up to 3 times (network glitches can cause transient failures)
+  local rewind_success=false
+  for retry in 1 2 3; do
+    log "pg_rewind attempt $retry/3..."
+    if gosu postgres pg_rewind --target-pgdata="$PGDATA" \
+        --source-server="host=$host port=$port user=$REPMGR_USER dbname=$REPMGR_DB password='${escaped_password}'" --no-sync 2>&1 | tee /tmp/pg_rewind.log; then
+      log "pg_rewind successful on attempt $retry"
+      rewind_success=true
+      break
+    else
+      log "pg_rewind attempt $retry failed"
+      if [ $retry -lt 3 ]; then
+        log "Waiting 5 seconds before retry..."
+        sleep 5
+        # Re-check primary is still available
+        if ! wait_for_port "$host" "$port" 5; then
+          log "Primary became unreachable during retry. Aborting rewind."
+          return 1
+        fi
+      fi
+    fi
+  done
+  
+  if [ "$rewind_success" = true ]; then
     gosu postgres pg_ctl -D "$PGDATA" -w start
     write_last_primary "$host"
     return 0
   else
-    log "pg_rewind failed"
+    log "pg_rewind failed after 3 attempts"
+    cat /tmp/pg_rewind.log 2>/dev/null || true
     return 1
   fi
 }
@@ -759,13 +810,40 @@ else
     log "Detected running primary at '$existing_primary'. This is a standby restart, not cluster outage."
     log "Following standard rejoin flow..."
     
+    # Wait for primary to be fully ready before attempting rewind
+    log "Ensuring primary is fully ready before rejoin attempt..."
+    local primary_host="${existing_primary%:*}"
+    local primary_port="${existing_primary#*:}"
+    [ "$primary_host" = "$primary_port" ] && primary_port=5432
+    
+    local ready_count=0
+    for i in $(seq 1 30); do
+      if wait_for_port "$primary_host" "$primary_port" 3 && is_primary "$primary_host" "$primary_port"; then
+        ready_count=$((ready_count + 1))
+        if [ "$ready_count" -ge 3 ]; then
+          log "Primary is confirmed ready (3 consecutive checks passed)"
+          break
+        fi
+      else
+        ready_count=0
+      fi
+      if [ $i -lt 30 ]; then
+        log "Waiting for primary to stabilize... (attempt $i/30)"
+        sleep 2
+      fi
+    done
+    
+    if [ "$ready_count" -lt 3 ]; then
+      log "WARNING: Primary not fully stable after 60s, proceeding anyway..."
+    fi
+    
     # Start local PG to check if we can rejoin
     gosu postgres pg_ctl -D "$PGDATA" -w start
     
     # Try rewind first (faster), fall back to clone if needed
     if attempt_rewind "$existing_primary"; then
       log "Rejoining via repmgr node rejoin..."
-      gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind -h "${existing_primary%:*}" -p "${existing_primary#*:}" -U "$REPMGR_USER" -d "$REPMGR_DB" || true
+      gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind -h "${primary_host}" -p "${primary_port}" -U "$REPMGR_USER" -d "$REPMGR_DB" || true
       gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
       log "Successfully rejoined cluster as standby."
     else
