@@ -175,13 +175,13 @@ sed -i "s/^use_watchdog = .*/use_watchdog = off/" /etc/pgpool-II/pgpool.conf
 # Allow reads on primary
 sed -i "s/^#primary_read_only = off/primary_read_only = off/" /etc/pgpool-II/pgpool.conf || echo "primary_read_only = off" >> /etc/pgpool-II/pgpool.conf
 
-# Update passwords in pgpool.conf
-sed -i "s/^sr_check_user = .*/sr_check_user = 'repmgr'/" /etc/pgpool-II/pgpool.conf
-sed -i "s/^sr_check_password = .*/sr_check_password = '${REPMGR_PASSWORD}'/" /etc/pgpool-II/pgpool.conf
-sed -i "s/^health_check_user = .*/health_check_user = 'repmgr'/" /etc/pgpool-II/pgpool.conf
-sed -i "s/^health_check_password = .*/health_check_password = '${REPMGR_PASSWORD}'/" /etc/pgpool-II/pgpool.conf
-sed -i "s/^wd_lifecheck_user = .*/wd_lifecheck_user = 'repmgr'/" /etc/pgpool-II/pgpool.conf
-sed -i "s/^wd_lifecheck_password = .*/wd_lifecheck_password = '${REPMGR_PASSWORD}'/" /etc/pgpool-II/pgpool.conf
+# Update passwords in pgpool.conf using | delimiter to avoid quote escaping issues
+sed -i "s|^sr_check_user = .*|sr_check_user = 'repmgr'|" /etc/pgpool-II/pgpool.conf
+sed -i "s|^sr_check_password = .*|sr_check_password = '${REPMGR_PASSWORD}'|" /etc/pgpool-II/pgpool.conf
+sed -i "s|^health_check_user = .*|health_check_user = 'repmgr'|" /etc/pgpool-II/pgpool.conf
+sed -i "s|^health_check_password = .*|health_check_password = '${REPMGR_PASSWORD}'|" /etc/pgpool-II/pgpool.conf
+sed -i "s|^wd_lifecheck_user = .*|wd_lifecheck_user = 'repmgr'|" /etc/pgpool-II/pgpool.conf
+sed -i "s|^wd_lifecheck_password = .*|wd_lifecheck_password = '${REPMGR_PASSWORD}'|" /etc/pgpool-II/pgpool.conf
 
 # Discover and wait for current primary (dynamic discovery)
 echo "[$(date)] Discovering current primary in cluster..."
