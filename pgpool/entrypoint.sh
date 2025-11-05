@@ -250,6 +250,24 @@ sed -i "s|^wd_lifecheck_user = .*|wd_lifecheck_user = 'repmgr'|" /etc/pgpool-II/
 sed -i "s|^wd_lifecheck_password = .*|wd_lifecheck_password = '${REPMGR_PASSWORD}'|" /etc/pgpool-II/pgpool.conf
 echo "[$(date)] Password configuration updated successfully"
 
+# VERIFY passwords were actually written to pgpool.conf
+echo "[$(date)] DEBUG: Verifying passwords in pgpool.conf..."
+health_check_pw_written=$(grep "^health_check_password = " /etc/pgpool-II/pgpool.conf | sed "s/^health_check_password = '//;s/'$//" || echo "NOT_FOUND")
+sr_check_pw_written=$(grep "^sr_check_password = " /etc/pgpool-II/pgpool.conf | sed "s/^sr_check_password = '//;s/'$//" || echo "NOT_FOUND")
+echo "[$(date)] DEBUG: health_check_password in file: ${#health_check_pw_written} chars (expected: ${#REPMGR_PASSWORD})"
+echo "[$(date)] DEBUG: sr_check_password in file: ${#sr_check_pw_written} chars (expected: ${#REPMGR_PASSWORD})"
+
+if [ "${#health_check_pw_written}" -ne "${#REPMGR_PASSWORD}" ]; then
+    echo "[$(date)] WARNING: health_check_password length mismatch!"
+    echo "[$(date)] Expected: ${#REPMGR_PASSWORD} chars, Got: ${#health_check_pw_written} chars"
+    echo "[$(date)] This could be due to special characters in password causing sed issues"
+fi
+
+if [ "${#sr_check_pw_written}" -ne "${#REPMGR_PASSWORD}" ]; then
+    echo "[$(date)] WARNING: sr_check_password length mismatch!"
+    echo "[$(date)] Expected: ${#REPMGR_PASSWORD} chars, Got: ${#sr_check_pw_written} chars"
+fi
+
 # Enforce safe load-balancing settings to avoid routing writes to standbys.
 # These settings make sure pgpool does not do statement-level load balancing
 # and that any detected write will not be load-balanced to a standby.

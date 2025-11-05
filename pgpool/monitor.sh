@@ -71,8 +71,40 @@ rewrite_backends() {
     if ! diff -q "$PGPOOL_CONF" "$tmp" >/dev/null 2>&1; then
         mv "$tmp" "$PGPOOL_CONF"
         log "Updated backend weights (primary=$primary); reloading pgpool"
+        
+        # DEBUG: Check what password is configured in pgpool.conf for health_check
+        log "DEBUG: Checking pgpool.conf password configuration..."
+        health_check_pw=$(grep "^health_check_password = " "$PGPOOL_CONF" | sed "s/^health_check_password = '//;s/'$//" || echo "NOT_SET")
+        sr_check_pw=$(grep "^sr_check_password = " "$PGPOOL_CONF" | sed "s/^sr_check_password = '//;s/'$//" || echo "NOT_SET")
+        log "DEBUG: health_check_password length in pgpool.conf: ${#health_check_pw} chars"
+        log "DEBUG: sr_check_password length in pgpool.conf: ${#sr_check_pw} chars"
+        log "DEBUG: REPMGR_PASSWORD (from env) length: ${#BACKEND_PW} chars"
+        
+        # CRITICAL: Test if configured password actually works
+        if [ -n "$primary" ]; then
+            log "DEBUG: Testing if health_check_password can connect to primary ($primary)..."
+            if [ "$health_check_pw" != "NOT_SET" ] && [ -n "$health_check_pw" ]; then
+                if PGPASSWORD="$health_check_pw" psql -h "$primary" -U repmgr -d postgres -tAc "SELECT 1" >/dev/null 2>&1; then
+                    log "DEBUG: ✓ health_check_password works for backend connection"
+                else
+                    log "DEBUG: ✗ health_check_password DOES NOT WORK for backend!"
+                    log "DEBUG: This is why PCP reload fails - worker cannot connect to backend"
+                    
+                    # Test with env variable password
+                    if PGPASSWORD="$BACKEND_PW" psql -h "$primary" -U repmgr -d postgres -tAc "SELECT 1" >/dev/null 2>&1; then
+                        log "DEBUG: ✓ But REPMGR_PASSWORD (from env) DOES work!"
+                        log "DEBUG: → pgpool.conf has WRONG password! Need to fix entrypoint.sh sed command"
+                    fi
+                fi
+            else
+                log "DEBUG: health_check_password is NOT SET in pgpool.conf!"
+            fi
+        fi
+        
+        # Try PCP reload
         if command -v pcp_reload >/dev/null 2>&1; then
-            pcp_reload -h 127.0.0.1 -p "$PCP_PORT" -U repmgr -w || true
+            log "DEBUG: Running: pcp_reload -h 127.0.0.1 -p $PCP_PORT -U repmgr -w"
+            pcp_reload -h 127.0.0.1 -p "$PCP_PORT" -U repmgr -w 2>&1 | while read line; do log "PCP: $line"; done || log "WARNING: pcp_reload failed"
         elif command -v pcp_reload_config >/dev/null 2>&1; then
             pcp_reload_config -h 127.0.0.1 -p "$PCP_PORT" -U repmgr -w || true
         elif command -v pcp_reloadcfg >/dev/null 2>&1; then
