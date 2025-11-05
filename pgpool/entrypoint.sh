@@ -225,12 +225,14 @@ echo "[$(date)] Backend entries written to /etc/pgpool-II/pgpool.conf"
 
 # Update passwords in pgpool.conf AFTER backend rewrite (so they don't get overwritten)
 # Using | delimiter to avoid quote escaping issues
+echo "[$(date)] Updating authentication passwords in pgpool.conf..."
 sed -i "s|^sr_check_user = .*|sr_check_user = 'repmgr'|" /etc/pgpool-II/pgpool.conf
 sed -i "s|^sr_check_password = .*|sr_check_password = '${REPMGR_PASSWORD}'|" /etc/pgpool-II/pgpool.conf
 sed -i "s|^health_check_user = .*|health_check_user = 'repmgr'|" /etc/pgpool-II/pgpool.conf
 sed -i "s|^health_check_password = .*|health_check_password = '${REPMGR_PASSWORD}'|" /etc/pgpool-II/pgpool.conf
 sed -i "s|^wd_lifecheck_user = .*|wd_lifecheck_user = 'repmgr'|" /etc/pgpool-II/pgpool.conf
 sed -i "s|^wd_lifecheck_password = .*|wd_lifecheck_password = '${REPMGR_PASSWORD}'|" /etc/pgpool-II/pgpool.conf
+echo "[$(date)] Password configuration updated successfully"
 
 # Enforce safe load-balancing settings to avoid routing writes to standbys.
 # These settings make sure pgpool does not do statement-level load balancing
