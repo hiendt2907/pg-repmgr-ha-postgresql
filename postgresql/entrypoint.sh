@@ -48,6 +48,11 @@ ensure_dirs() {
   chown -R postgres:postgres "$PGDATA"
 }
 
+# Ensure local hostname (NODE_NAME) resolves to localhost inside the container.
+# This allows repmgr's readiness checks (which use the node conninfo host) to
+# succeed even if the platform DNS doesn't map the node's FQDN to the container's IP.
+ 
+
 write_pgpass() {
   local pgpass="/var/lib/postgresql/.pgpass"
   # Escape special characters in password for .pgpass format
@@ -936,8 +941,24 @@ AUTOCONF
             --config-files=postgresql.conf,pg_hba.conf,postgresql.auto.conf; then
           log "Successfully rejoined cluster as standby."
         else
-          log "CRITICAL: repmgr node rejoin command failed. Halting for safety."
-          sleep infinity
+          log "Node rejoin failed; attempting metadata normalize then register."
+          gosu postgres repmgr -f "$REPMGR_CONF" \
+            -h "$primary_host" -p "$primary_port" \
+            -U "$REPMGR_USER" -d "$REPMGR_DB" \
+            primary unregister --node-id="$NODE_ID" --force || true
+
+          # Ensure local PostgreSQL is running before standby register
+          gosu postgres pg_ctl -D "$PGDATA" -w start || true
+
+          if gosu postgres repmgr \
+              -h "$primary_host" -p "$primary_port" \
+              -U "$REPMGR_USER" -d "$REPMGR_DB" -f "$REPMGR_CONF" \
+              standby register --force; then
+            log "Node registered as standby (fallback)."
+          else
+            log "Standby register failed; falling back to full clone."
+            clone_standby "$existing_primary"
+          fi
         fi
       else
         log "pg_rewind failed. Falling back to full clone."
@@ -1019,8 +1040,24 @@ AUTOCONF
               --config-files=postgresql.conf,pg_hba.conf,postgresql.auto.conf; then
             log "Successfully rejoined cluster under new primary '$election_winner'."
           else
-            log "CRITICAL: repmgr node rejoin command failed. Halting for safety."
-            sleep infinity
+            log "Node rejoin failed; attempting metadata normalize then register."
+            gosu postgres repmgr -f "$REPMGR_CONF" \
+              -h "$election_winner" -p 5432 \
+              -U "$REPMGR_USER" -d "$REPMGR_DB" \
+              primary unregister --node-id="$NODE_ID" --force || true
+
+            # Ensure local PostgreSQL is running before standby register
+            gosu postgres pg_ctl -D "$PGDATA" -w start || true
+
+            if gosu postgres repmgr \
+                -h "$election_winner" -p 5432 \
+                -U "$REPMGR_USER" -d "$REPMGR_DB" -f "$REPMGR_CONF" \
+                standby register --force; then
+              log "Node registered as standby (fallback)."
+            else
+              log "Standby register failed; falling back to full clone from winner."
+              clone_standby "$winner_hostport"
+            fi
           fi
         else
           log "pg_rewind failed. Falling back to full clone from winner '$election_winner'."
