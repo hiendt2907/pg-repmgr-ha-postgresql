@@ -241,6 +241,7 @@ echo "[$(date)] Backend entries written to /etc/pgpool-II/pgpool.conf"
 # Update passwords in pgpool.conf AFTER backend rewrite (so they don't get overwritten)
 # Using | delimiter to avoid quote escaping issues
 echo "[$(date)] Updating authentication passwords in pgpool.conf..."
+echo "[$(date)] DEBUG: Using REPMGR_PASSWORD with length=${#REPMGR_PASSWORD} chars"
 sed -i "s|^sr_check_user = .*|sr_check_user = 'repmgr'|" /etc/pgpool-II/pgpool.conf
 sed -i "s|^sr_check_password = .*|sr_check_password = '${REPMGR_PASSWORD}'|" /etc/pgpool-II/pgpool.conf
 sed -i "s|^health_check_user = .*|health_check_user = 'repmgr'|" /etc/pgpool-II/pgpool.conf
@@ -495,6 +496,73 @@ for be in "${BACKENDS_ARRAY[@]}"; do
     fi
   done
 done
+
+# CRITICAL TEST: Verify REPMGR_PASSWORD works with PostgreSQL backend (AFTER waiting for backends)
+echo ""
+echo "[$(date)] ════════════════════════════════════════════════════════"
+echo "[$(date)] CRITICAL TEST: Verifying REPMGR_PASSWORD authentication"
+echo "[$(date)] ════════════════════════════════════════════════════════"
+echo "[$(date)] Testing connection to PRIMARY_NODE: $PRIMARY_NODE"
+echo "[$(date)] REPMGR_PASSWORD length: ${#REPMGR_PASSWORD} chars"
+echo ""
+
+if [ -n "$PRIMARY_NODE" ]; then
+  if PGPASSWORD="$REPMGR_PASSWORD" psql -h "$PRIMARY_NODE" -U repmgr -d postgres -tAc "SELECT 'Connection successful!' as status" 2>/dev/null; then
+    echo ""
+    echo "[$(date)] ✓✓✓ SUCCESS: REPMGR_PASSWORD works for PostgreSQL backend!"
+    echo "[$(date)] PCP worker will be able to authenticate to backend."
+    echo ""
+  else
+    echo ""
+    echo "[$(date)] ✗✗✗ FATAL: REPMGR_PASSWORD AUTHENTICATION FAILED!"
+    echo "[$(date)] This is the ROOT CAUSE of: 'FATAL: authentication failed for user repmgr'"
+    echo ""
+    echo "[$(date)] Debug Information:"
+    echo "[$(date)]   - Target: $PRIMARY_NODE"
+    echo "[$(date)]   - User: repmgr"
+    echo "[$(date)]   - Password length: ${#REPMGR_PASSWORD} chars"
+    echo "[$(date)]   - Command attempted: PGPASSWORD=*** psql -h $PRIMARY_NODE -U repmgr -d postgres"
+    echo ""
+    echo "[$(date)] Possible Root Causes:"
+    echo "[$(date)]   1. REPMGR_PASSWORD differs between pgpool and postgresql services on Railway"
+    echo "[$(date)]   2. Railway Shared Variable 'REPMGR_PASSWORD' not properly linked to both services"
+    echo "[$(date)]   3. PostgreSQL repmgr user was created with different password"
+    echo "[$(date)]   4. Password contains special characters causing shell escaping issues"
+    echo ""
+    echo "[$(date)] Testing alternative authentication methods..."
+    
+    # Test with postgres user to isolate issue
+    if PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$PRIMARY_NODE" -U postgres -d postgres -tAc "SELECT 1" > /dev/null 2>&1; then
+      echo "[$(date)]   ✓ postgres user can connect - network is OK"
+      echo "[$(date)]   → This confirms PASSWORD MISMATCH for repmgr user"
+      
+      # Try to get repmgr user info from database
+      echo ""
+      echo "[$(date)] Querying PostgreSQL for user information..."
+      PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$PRIMARY_NODE" -U postgres -d postgres -c "SELECT rolname, rolcanlogin, rolreplication FROM pg_roles WHERE rolname IN ('repmgr', 'postgres', 'pgpool');" 2>/dev/null || true
+      
+    else
+      echo "[$(date)]   ✗ postgres user also cannot connect"
+      echo "[$(date)]   → Network issue or PostgreSQL not ready"
+    fi
+    
+    echo ""
+    echo "[$(date)] ════════════════════════════════════════════════════════"
+    echo "[$(date)] ACTION REQUIRED:"
+    echo "[$(date)] 1. Go to Railway dashboard → Shared Variables"
+    echo "[$(date)] 2. Verify 'REPMGR_PASSWORD' exists and is linked to ALL services"
+    echo "[$(date)] 3. Compare password value with what was used during PostgreSQL initialization"
+    echo "[$(date)] 4. If password was changed, must restart ALL PostgreSQL nodes for new password"
+    echo "[$(date)] ════════════════════════════════════════════════════════"
+    echo ""
+    
+    # Don't exit - let pgpool start and fail with clear errors in logs
+  fi
+else
+  echo "[$(date)] WARNING: PRIMARY_NODE not set, cannot test backend authentication"
+  echo "[$(date)] This test should run AFTER backend discovery"
+fi
+echo ""
 
 # Display configuration summary
 echo ""
