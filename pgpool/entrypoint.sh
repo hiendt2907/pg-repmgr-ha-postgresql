@@ -118,14 +118,23 @@ else
 fi
 
 # Create .pcppass for monitor script (pcp client convenience)
+# Need both localhost and 127.0.0.1 entries because pcp commands use 127.0.0.1
 mkdir -p /var/lib/postgresql
-echo "localhost:9898:admin:$PCP_PASSWORD" > /var/lib/postgresql/.pcppass
+cat > /var/lib/postgresql/.pcppass <<EOF
+localhost:9898:admin:$PCP_PASSWORD
+127.0.0.1:9898:admin:$PCP_PASSWORD
+*:9898:admin:$PCP_PASSWORD
+EOF
 chown postgres:postgres /var/lib/postgresql/.pcppass
 chmod 600 /var/lib/postgresql/.pcppass
 echo "[$(date)] Created .pcppass file"
 
 # Also provide .pcppass for root (monitor runs as root)
-echo "localhost:9898:admin:$PCP_PASSWORD" > /root/.pcppass
+cat > /root/.pcppass <<EOF
+localhost:9898:admin:$PCP_PASSWORD
+127.0.0.1:9898:admin:$PCP_PASSWORD
+*:9898:admin:$PCP_PASSWORD
+EOF
 chmod 600 /root/.pcppass
 
 # Update pgpool.conf with runtime values
