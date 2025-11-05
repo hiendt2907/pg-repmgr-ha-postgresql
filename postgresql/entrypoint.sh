@@ -531,7 +531,8 @@ wait_for_local_recovery_state() {
   local timeout=${2:-30}
   for _ in $(seq 1 "$timeout"); do
     local cur
-    cur=$(gosu postgres psql -h localhost -p "$PG_PORT" -U "$POSTGRES_USER" -d postgres -tAc "SELECT pg_is_in_recovery();" 2>/dev/null || echo "")
+    # Use local Unix socket connection (no -h) for maximum reliability, as it bypasses network and pg_hba.conf issues.
+    cur=$(gosu postgres psql -p "$PG_PORT" -U "$POSTGRES_USER" -d postgres -tAc "SELECT pg_is_in_recovery();" 2>/dev/null || echo "")
     cur=$(echo "$cur" | tr -d '[:space:]')
     if [ "$cur" = "$expected" ]; then
       log "Local recovery state is '$cur' (expected '$expected')"

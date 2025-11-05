@@ -217,12 +217,14 @@ for be in "${BACKENDS_ARRAY[@]}"; do
   host=$(echo "$be" | cut -d: -f1)
   port=$(echo "$be" | cut -s -d: -f2)
   if [ -z "$port" ]; then port=5432; fi
-  if [ "$i" -eq 0 ]; then
-    # Primary should not be used for load-balanced read queries to avoid writes
+  
+  # Default weight is 1 for all nodes
+  weight=1
+  # If this is the primary node, set its weight to 0 so it doesn't receive read queries
+  if [ "$host" = "$PRIMARY_NODE" ]; then
     weight=0
-  else
-    weight=1
   fi
+
   cat >> "$TMP_CONF" <<EOF
 backend_hostname${i} = '${host}'
 backend_port${i} = ${port}
