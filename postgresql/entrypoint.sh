@@ -200,7 +200,7 @@ get_remote_timeline() {
   
   # Use a short timeout for pg_isready
   if ! wait_for_port "$host" "$port" 3; then
-    log "get_remote_timeline: Node $host is not ready."
+    log "get_remote_timeline: Node $host is not ready." >&2
     echo "0"
     return
   fi
@@ -211,7 +211,7 @@ get_remote_timeline() {
   
   # Ensure the result is a number, default to 0 if not
   if ! [[ "$remote_timeline" =~ ^[0-9]+$ ]]; then
-    log "get_remote_timeline: Invalid timeline response from $host: '$remote_timeline'"
+    log "get_remote_timeline: Invalid timeline response from $host: '$remote_timeline'" >&2
     echo "0"
   else
     echo "$remote_timeline"
@@ -303,13 +303,13 @@ write_postgresql_conf() {
 # Network
 listen_addresses = '*'
 port = ${PG_PORT}
-max_connections = 500             # Balanced for 16GB RAM
+max_connections = 1000            # Increased for high concurrency and compatibility
 
 # Replication - Optimized for FASTEST replication with 8 vCores
 wal_level = replica
-max_wal_senders = 10              # Sufficient for standbys + archiving
+max_wal_senders = 20              # Increased to match max_connections scaling
 wal_keep_size = '4GB'             # Reduced for faster cycling
-max_replication_slots = 10
+max_replication_slots = 20        # Increased to match max_wal_senders
 hot_standby = on
 hot_standby_feedback = on
 wal_log_hints = on
@@ -1001,7 +1001,7 @@ AUTOCONF
       if [ "$winner_is_primary" = true ]; then
         log "Proceeding to rejoin winner '$election_winner'."
         if attempt_rewind "$winner_hostport"; then
-          gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind || true
+          gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind -h "$election_winner" -p 5432 -U "$REPMGR_USER" -d "$REPMGR_DB" || true
           gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
           log "Successfully rejoined cluster under new primary '$election_winner'."
         else
