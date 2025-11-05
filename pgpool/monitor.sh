@@ -118,6 +118,26 @@ rewrite_backends() {
 }
 
 CURRENT_PRIMARY=""
+PGPOOL_READY=0
+
+# Wait for pgpool to be fully ready before starting monitoring loop
+log "Waiting for pgpool to be fully ready..."
+for i in {1..60}; do
+    if pgrep -x pgpool >/dev/null 2>&1; then
+        # Pgpool process exists, now check if it's accepting connections
+        if PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h localhost -p 5432 -U postgres -d postgres -tAc "SELECT 1" >/dev/null 2>&1; then
+            log "✓ Pgpool is ready and accepting connections"
+            PGPOOL_READY=1
+            break
+        fi
+    fi
+    sleep 2
+done
+
+if [ "$PGPOOL_READY" -eq 0 ]; then
+    log "ERROR: Pgpool did not become ready after 120 seconds; monitoring disabled"
+    exit 1
+fi
 
 while true; do
     sleep "$CHECK_INTERVAL"
