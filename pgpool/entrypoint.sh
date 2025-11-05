@@ -661,4 +661,5 @@ rm -f /var/run/pgpool/pgpool.pid /var/run/pgpool.pid /run/pgpool/pgpool.pid /run
 
 # Start pgpool-II
 echo "[$(date)] Starting pgpool-II..."
-exec gosu postgres pgpool -n -f /etc/pgpool-II/pgpool.conf -F /etc/pgpool-II/pcp.conf -a /etc/pgpool-II/pool_hba.conf
+# Use -d for debug mode to get more verbose logs
+exec gosu postgres pgpool -n -d -f /etc/pgpool-II/pgpool.conf -F /etc/pgpool-II/pcp.conf -a /etc/pgpool-II/pool_hba.conf
