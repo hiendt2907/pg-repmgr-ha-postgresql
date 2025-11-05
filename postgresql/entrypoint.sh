@@ -708,7 +708,6 @@ attempt_rewind() {
   done
   
   if [ "$rewind_success" = true ]; then
-    gosu postgres pg_ctl -D "$PGDATA" -w start
     write_last_primary "$host"
     return 0
   else
