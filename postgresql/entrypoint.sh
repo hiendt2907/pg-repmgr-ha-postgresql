@@ -517,6 +517,25 @@ wait_for_primary_ready() {
   return 1
 }
 
+# Wait for local server to reach expected recovery state
+# expected: "t" for standby (in recovery), "f" for primary (not in recovery)
+wait_for_local_recovery_state() {
+  local expected=${1:-t}
+  local timeout=${2:-30}
+  for _ in $(seq 1 "$timeout"); do
+    local cur
+    cur=$(gosu postgres psql -h localhost -p "$PG_PORT" -U "$POSTGRES_USER" -d postgres -tAc "SELECT pg_is_in_recovery();" 2>/dev/null || echo "")
+    cur=$(echo "$cur" | tr -d '[:space:]')
+    if [ "$cur" = "$expected" ]; then
+      log "Local recovery state is '$cur' (expected '$expected')"
+      return 0
+    fi
+    sleep 1
+  done
+  log "Timeout waiting for local recovery state to become '$expected' (last='$cur')"
+  return 1
+}
+
 init_primary() {
   log "Initializing primary (fresh PGDATA)..."
   safe_clear_pgdata
@@ -1008,5 +1027,19 @@ if [ -n "$lkp_val" ] && [ "$lkp_val" != "$NODE_NAME" ]; then
   fi
 fi
 
-start_repmgrd
-sleep infinity
+# If we expected to be a standby (last-known-primary is another node), ensure local is in recovery
+if [ -n "$lkp_val" ] && [ "$lkp_val" != "$NODE_NAME" ]; then
+  log "Expecting to be a standby (LKP='$lkp_val'). Waiting up to 30s for local server to be in recovery (standby)..."
+  if wait_for_local_recovery_state t 30; then
+    log "Local is standby; safe to start repmgrd"
+    start_repmgrd
+  else
+    log "Local did NOT become standby within timeout. NOT starting repmgrd to avoid advertising as primary.\n"
+    log "Manual intervention required: inspect PostgreSQL state and repmgr logs. Sleeping for inspection."
+    sleep infinity
+  fi
+else
+  # No LKP or we are LKP -> safe to start repmgrd
+  start_repmgrd
+  sleep infinity
+fi
