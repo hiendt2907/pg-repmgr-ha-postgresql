@@ -947,7 +947,16 @@ AUTOCONF
             -U "$REPMGR_USER" -d "$REPMGR_DB" \
             primary unregister --node-id="$NODE_ID" --force || true
 
-          # Ensure local PostgreSQL is running before standby register
+          # Ensure this node boots as a standby by writing recovery settings
+          touch "$PGDATA/standby.signal"
+          chown postgres:postgres "$PGDATA/standby.signal"
+          cat > "$PGDATA/postgresql.auto.conf" <<-AUTOCONF
+primary_conninfo = 'host=$primary_host port=$primary_port user=$REPMGR_USER dbname=$REPMGR_DB password=$REPMGR_PASSWORD application_name=$NODE_NAME'
+primary_slot_name = 'repmgr_slot_${NODE_ID}'
+AUTOCONF
+          chown postgres:postgres "$PGDATA/postgresql.auto.conf"
+
+          # Start PostgreSQL now that recovery settings are in place
           gosu postgres pg_ctl -D "$PGDATA" -w start || true
 
           if gosu postgres repmgr \
@@ -1046,7 +1055,16 @@ AUTOCONF
               -U "$REPMGR_USER" -d "$REPMGR_DB" \
               primary unregister --node-id="$NODE_ID" --force || true
 
-            # Ensure local PostgreSQL is running before standby register
+            # Ensure this node boots as a standby by writing recovery settings
+            touch "$PGDATA/standby.signal"
+            chown postgres:postgres "$PGDATA/standby.signal"
+            cat > "$PGDATA/postgresql.auto.conf" <<-AUTOCONF
+primary_conninfo = 'host=$election_winner port=5432 user=$REPMGR_USER dbname=$REPMGR_DB password=$REPMGR_PASSWORD application_name=$NODE_NAME'
+primary_slot_name = 'repmgr_slot_${NODE_ID}'
+AUTOCONF
+            chown postgres:postgres "$PGDATA/postgresql.auto.conf"
+
+            # Start PostgreSQL now that recovery settings are in place
             gosu postgres pg_ctl -D "$PGDATA" -w start || true
 
             if gosu postgres repmgr \
