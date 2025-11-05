@@ -423,8 +423,6 @@ host    all             postgres        0.0.0.0/0               scram-sha-256
 host    all             postgres        ::/0                    scram-sha-256
 host    all             ${REPMGR_USER}  0.0.0.0/0               scram-sha-256
 host    all             ${REPMGR_USER}  ::/0                    scram-sha-256
-host    all             admin           0.0.0.0/0               scram-sha-256
-host    all             admin           ::/0                    scram-sha-256
 
 # Replication connections (SCRAM-SHA-256)
 host    replication     ${REPMGR_USER}  0.0.0.0/0               scram-sha-256
@@ -606,15 +604,6 @@ EOSQL
     GRANT USAGE ON SCHEMA public TO app_readwrite;
     GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_readwrite;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_readwrite;
-EOSQL
-
-  # Admin user for pgpool PCP authentication (minimal privileges, only needs to exist)
-  log "Creating admin user for pgpool PCP..."
-  gosu postgres psql -U "$POSTGRES_USER" -tc "SELECT 1 FROM pg_roles WHERE rolname='admin'" | grep -q 1 \
-    || gosu postgres psql -U "$POSTGRES_USER" -c "CREATE USER admin WITH PASSWORD '${PCP_PASSWORD:-adminpass}';"
-  
-  gosu postgres psql -U "$POSTGRES_USER" <<-EOSQL
-    GRANT CONNECT ON DATABASE postgres TO admin;
 EOSQL
 
   log "Application users created successfully"

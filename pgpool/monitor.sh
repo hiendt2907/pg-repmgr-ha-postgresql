@@ -72,11 +72,11 @@ rewrite_backends() {
         mv "$tmp" "$PGPOOL_CONF"
         log "Updated backend weights (primary=$primary); reloading pgpool"
         if command -v pcp_reload >/dev/null 2>&1; then
-            pcp_reload -h 127.0.0.1 -p "$PCP_PORT" -U admin -w || true
+            pcp_reload -h 127.0.0.1 -p "$PCP_PORT" -U repmgr -w || true
         elif command -v pcp_reload_config >/dev/null 2>&1; then
-            pcp_reload_config -h 127.0.0.1 -p "$PCP_PORT" -U admin -w || true
+            pcp_reload_config -h 127.0.0.1 -p "$PCP_PORT" -U repmgr -w || true
         elif command -v pcp_reloadcfg >/dev/null 2>&1; then
-            pcp_reloadcfg -h 127.0.0.1 -p "$PCP_PORT" -U admin -w || true
+            pcp_reloadcfg -h 127.0.0.1 -p "$PCP_PORT" -U repmgr -w || true
         elif pid=$(pgrep -x pgpool | head -n1); then
             kill -HUP "$pid" || true
         fi

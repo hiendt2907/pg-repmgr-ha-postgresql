@@ -105,35 +105,36 @@ generate_pcp_entry() {
   fi
 }
 
-echo "[$(date)] Creating /etc/pgpool-II/pcp.conf from PCP_PASSWORD env..."
-PCP_HASH=$(generate_pcp_entry admin "$PCP_PASSWORD" || true)
+echo "[$(date)] Creating /etc/pgpool-II/pcp.conf from REPMGR_PASSWORD env..."
+PCP_HASH=$(generate_pcp_entry repmgr "$REPMGR_PASSWORD" || true)
 if [ -n "$PCP_HASH" ]; then
   echo "$PCP_HASH" > /etc/pgpool-II/pcp.conf
   chmod 640 /etc/pgpool-II/pcp.conf
-  echo "[$(date)] Created pcp.conf for admin"
+  echo "[$(date)] Created pcp.conf for repmgr user"
 else
   echo "[$(date)] WARNING: failed to create pcp.conf hash with pg_md5; using precomputed fallback"
-  echo "admin:e8a48653851e28c69d0506508fb27fc5" > /etc/pgpool-II/pcp.conf
+  echo "repmgr:e8a48653851e28c69d0506508fb27fc5" > /etc/pgpool-II/pcp.conf
   chmod 644 /etc/pgpool-II/pcp.conf
 fi
 
 # Create .pcppass for monitor script (pcp client convenience)
 # Need both localhost and 127.0.0.1 entries because pcp commands use 127.0.0.1
+# Using repmgr user which is consistent across PostgreSQL and pgpool
 mkdir -p /var/lib/postgresql
 cat > /var/lib/postgresql/.pcppass <<EOF
-localhost:9898:admin:$PCP_PASSWORD
-127.0.0.1:9898:admin:$PCP_PASSWORD
-*:9898:admin:$PCP_PASSWORD
+localhost:9898:repmgr:$REPMGR_PASSWORD
+127.0.0.1:9898:repmgr:$REPMGR_PASSWORD
+*:9898:repmgr:$REPMGR_PASSWORD
 EOF
 chown postgres:postgres /var/lib/postgresql/.pcppass
 chmod 600 /var/lib/postgresql/.pcppass
-echo "[$(date)] Created .pcppass file"
+echo "[$(date)] Created .pcppass file for repmgr user"
 
 # Also provide .pcppass for root (monitor runs as root)
 cat > /root/.pcppass <<EOF
-localhost:9898:admin:$PCP_PASSWORD
-127.0.0.1:9898:admin:$PCP_PASSWORD
-*:9898:admin:$PCP_PASSWORD
+localhost:9898:repmgr:$REPMGR_PASSWORD
+127.0.0.1:9898:repmgr:$REPMGR_PASSWORD
+*:9898:repmgr:$REPMGR_PASSWORD
 EOF
 chmod 600 /root/.pcppass
 
@@ -401,7 +402,6 @@ repmgr:$REPMGR_PASSWORD
 app_readonly:$APP_READONLY_PASSWORD
 app_readwrite:$APP_READWRITE_PASSWORD
 pgpool:$REPMGR_PASSWORD
-admin:$PCP_PASSWORD
 EOF
 
 chmod 600 /run/pgpool/pool_passwd
