@@ -555,6 +555,10 @@ init_primary() {
   gosu postgres psql -U "$POSTGRES_USER" -tc "SELECT 1 FROM pg_database WHERE datname='${REPMGR_DB}'" | grep -q 1 \
     || gosu postgres psql -U "$POSTGRES_USER" -c "CREATE DATABASE ${REPMGR_DB} OWNER ${REPMGR_USER};"
 
+  # Create repmgr extension (CRITICAL: must be done BEFORE repmgr register)
+  gosu postgres psql -U "$POSTGRES_USER" -d "$REPMGR_DB" -tc "SELECT 1 FROM pg_extension WHERE extname='repmgr'" | grep -q 1 \
+    || gosu postgres psql -U "$POSTGRES_USER" -d "$REPMGR_DB" -c "CREATE EXTENSION repmgr;"
+
   # CRITICAL: Test authentication immediately after user creation
   log "Testing repmgr user authentication..."
   if PGPASSWORD="${REPMGR_PASSWORD}" psql -h localhost -U "${REPMGR_USER}" -d "${REPMGR_DB}" -c "SELECT 1" >/dev/null 2>&1; then
@@ -775,7 +779,12 @@ if [ "$IS_WITNESS" = "true" ]; then
       || gosu postgres psql -U "$POSTGRES_USER" -c "CREATE ROLE ${REPMGR_USER} WITH LOGIN REPLICATION SUPERUSER PASSWORD '${REPMGR_PASSWORD}';"
     gosu postgres psql -U "$POSTGRES_USER" -tc "SELECT 1 FROM pg_database WHERE datname='${REPMGR_DB}'" | grep -q 1 \
       || gosu postgres psql -U "$POSTGRES_USER" -c "CREATE DATABASE ${REPMGR_DB} OWNER ${REPMGR_USER};"
-    log "Witness: ensured local repmgr role/db (user=${REPMGR_USER}, db=${REPMGR_DB})"
+    
+    # Create repmgr extension in the database (critical for metadata storage)
+    gosu postgres psql -U "$POSTGRES_USER" -d "$REPMGR_DB" -tc "SELECT 1 FROM pg_extension WHERE extname='repmgr'" | grep -q 1 \
+      || gosu postgres psql -U "$POSTGRES_USER" -d "$REPMGR_DB" -c "CREATE EXTENSION repmgr;"
+    
+    log "Witness: ensured local repmgr role/db/extension (user=${REPMGR_USER}, db=${REPMGR_DB})"
   fi
 
   log "Registering witness against ${primary_hostport%:*}"
