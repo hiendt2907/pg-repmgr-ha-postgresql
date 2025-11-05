@@ -91,11 +91,18 @@ check_cluster_health() {
   if [ "$total_nodes" -eq 0 ]; then
     echo "UNKNOWN"; return
   fi
-  if [ "$total_nodes" -eq 1 ] && [ "$online_nodes" -eq 1 ]; then echo "GREEN"; return; fi
-  if [ "$online_nodes" -eq "$total_nodes" ]; then echo "GREEN"
-  elif [ "$online_nodes" -ge "$quorum" ]; then echo "YELLOW"
-  elif [ "$online_nodes" -eq 1 ] && [ "$total_nodes" -gt 1 ]; then echo "DISASTER"
-  else echo "RED"; fi
+  if [ "$total_nodes" -eq 1 ] && [ "$online_nodes" -eq 1 ]; then 
+    echo "GREEN"; return
+  fi
+  if [ "$online_nodes" -eq "$total_nodes" ]; then 
+    echo "GREEN"; return
+  elif [ "$online_nodes" -ge "$quorum" ]; then 
+    echo "YELLOW"; return
+  elif [ "$online_nodes" -eq 1 ] && [ "$total_nodes" -gt 1 ]; then 
+    echo "DISASTER"; return
+  else 
+    echo "RED"; return
+  fi
 }
 
 # --- Helpers for safe rejoin / clone ---
