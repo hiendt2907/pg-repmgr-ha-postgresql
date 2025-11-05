@@ -390,6 +390,7 @@ repmgr:$REPMGR_PASSWORD
 app_readonly:$APP_READONLY_PASSWORD
 app_readwrite:$APP_READWRITE_PASSWORD
 pgpool:$REPMGR_PASSWORD
+admin:$PCP_PASSWORD
 EOF
 
 chmod 600 /run/pgpool/pool_passwd
