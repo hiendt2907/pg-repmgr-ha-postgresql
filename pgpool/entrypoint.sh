@@ -106,15 +106,20 @@ generate_pcp_entry() {
 }
 
 echo "[$(date)] Creating /etc/pgpool-II/pcp.conf from REPMGR_PASSWORD env..."
+echo "[$(date)] DEBUG: REPMGR_PASSWORD is ${#REPMGR_PASSWORD} chars long"
+
+# Generate PCP hash using pg_md5 command
 PCP_HASH=$(generate_pcp_entry repmgr "$REPMGR_PASSWORD" || true)
 if [ -n "$PCP_HASH" ]; then
   echo "$PCP_HASH" > /etc/pgpool-II/pcp.conf
   chmod 640 /etc/pgpool-II/pcp.conf
-  echo "[$(date)] Created pcp.conf for repmgr user"
+  echo "[$(date)] Created pcp.conf for repmgr user with pg_md5"
+  echo "[$(date)] DEBUG: PCP_HASH = $PCP_HASH"
 else
-  echo "[$(date)] WARNING: failed to create pcp.conf hash with pg_md5; using precomputed fallback"
-  echo "repmgr:e8a48653851e28c69d0506508fb27fc5" > /etc/pgpool-II/pcp.conf
-  chmod 644 /etc/pgpool-II/pcp.conf
+  echo "[$(date)] ERROR: pg_md5 command failed! Cannot create pcp.conf without proper hash."
+  echo "[$(date)] DEBUG: Checking if pg_md5 exists..."
+  command -v pg_md5 && echo "pg_md5 found at $(command -v pg_md5)" || echo "pg_md5 NOT FOUND"
+  exit 1
 fi
 
 # Create .pcppass for monitor script (pcp client convenience)
@@ -389,6 +394,7 @@ fi
 # Create pool_passwd file with user credentials
 # For SCRAM-SHA-256, pgpool needs to query backend, so we use text format
 echo "[$(date)] Creating pool_passwd with text format for SCRAM-SHA-256..."
+echo "[$(date)] DEBUG: Password lengths - POSTGRES:${#POSTGRES_PASSWORD} REPMGR:${#REPMGR_PASSWORD} READONLY:${#APP_READONLY_PASSWORD} READWRITE:${#APP_READWRITE_PASSWORD}"
 
 # Ensure runtime directory for pool_passwd matches pgpool.conf
 mkdir -p /run/pgpool
@@ -407,6 +413,8 @@ EOF
 chmod 600 /run/pgpool/pool_passwd
 chown postgres:postgres /run/pgpool/pool_passwd
 echo "[$(date)] pool_passwd created with $(wc -l < /run/pgpool/pool_passwd) users"
+echo "[$(date)] DEBUG: First line of pool_passwd (postgres user): $(head -n1 /run/pgpool/pool_passwd | cut -d: -f1):***${#POSTGRES_PASSWORD}_chars***"
+echo "[$(date)] DEBUG: Second line of pool_passwd (repmgr user): $(sed -n '2p' /run/pgpool/pool_passwd | cut -d: -f1):***${#REPMGR_PASSWORD}_chars***"
 
 # Set correct permissions for config files
 chown postgres:postgres /etc/pgpool-II/*
@@ -430,13 +438,25 @@ EOSQL
 echo "[$(date)] Pgpool user created/verified on $PRIMARY_NODE"
 
 # Test backend connections (from PG_BACKENDS)
-echo "[$(date)] Testing backend connections..."
+echo "[$(date)] Testing backend connections with REPMGR_PASSWORD..."
 for be in "${BACKENDS_ARRAY[@]}"; do
   host=$(echo "$be" | cut -d: -f1)
+  echo "[$(date)] DEBUG: Testing connection to $host with repmgr user..."
   if PGPASSWORD="$REPMGR_PASSWORD" psql -h "$host" -U repmgr -d postgres -tAc "SELECT 1" > /dev/null 2>&1; then
-    echo "  ✓ $host is reachable"
+    echo "  ✓ $host is reachable with REPMGR_PASSWORD"
+    # Additional check: verify repmgr user password in PostgreSQL
+    ROLE_CHECK=$(PGPASSWORD="$REPMGR_PASSWORD" psql -h "$host" -U repmgr -d postgres -tAc "SELECT rolname FROM pg_roles WHERE rolname='repmgr';" 2>/dev/null || echo "")
+    if [ "$ROLE_CHECK" = "repmgr" ]; then
+      echo "  ✓ repmgr user exists in PostgreSQL on $host"
+    fi
   else
-    echo "  ✗ $host is NOT reachable (may come online later)"
+    echo "  ✗ $host is NOT reachable (may come online later or password mismatch)"
+    echo "[$(date)] DEBUG: Testing with POSTGRES_PASSWORD as fallback..."
+    if PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$host" -U postgres -d postgres -tAc "SELECT 1" > /dev/null 2>&1; then
+      echo "  ✓ $host is reachable with postgres user - network OK, likely repmgr password issue"
+    else
+      echo "  ✗ $host completely unreachable - network or PostgreSQL not ready"
+    fi
   fi
 done
 
