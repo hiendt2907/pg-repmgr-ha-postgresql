@@ -453,8 +453,8 @@ reconnect_interval=2              # Wait 2s between attempts (down from 5s)
 
 # Failover configuration - Aggressive for <10s total failover
 failover=automatic
-promote_command='/usr/local/bin/promote_guard.sh'  # Use promotion guard
-follow_command='repmgr standby follow -f /etc/repmgr/repmgr.conf --log-to-file --upstream-node-id=%n'
+promote_command='/etc/repmgr/promote.sh %n %h'
+follow_command='/etc/repmgr/follow.sh %n %h %d'
 
 # Promotion settings
 priority=$((200 - NODE_ID))       # Higher priority = preferred for promotion
@@ -923,9 +923,14 @@ AUTOCONF
       # Try rewind first
       if attempt_rewind "$existing_primary"; then
         log "Rejoining via repmgr node rejoin..."
-        gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind -h "${primary_host}" -p "${primary_port}" -U "$REPMGR_USER" -d "$REPMGR_DB" || true
-        gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
-        log "Successfully rejoined cluster as standby."
+        if gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind \
+            -h "${primary_host}" -p "${primary_port}" -U "$REPMGR_USER" -d "$REPMGR_DB" \
+            --config-files=postgresql.conf,pg_hba.conf,postgresql.auto.conf; then
+          log "Successfully rejoined cluster as standby."
+        else
+          log "CRITICAL: repmgr node rejoin command failed. Halting for safety."
+          sleep infinity
+        fi
       else
         log "pg_rewind failed. Falling back to full clone."
         clone_standby "$existing_primary"
@@ -1001,9 +1006,14 @@ AUTOCONF
       if [ "$winner_is_primary" = true ]; then
         log "Proceeding to rejoin winner '$election_winner'."
         if attempt_rewind "$winner_hostport"; then
-          gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind -h "$election_winner" -p 5432 -U "$REPMGR_USER" -d "$REPMGR_DB" || true
-          gosu postgres repmgr -f "$REPMGR_CONF" standby register --force || true
-          log "Successfully rejoined cluster under new primary '$election_winner'."
+          if gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind \
+              -h "$election_winner" -p 5432 -U "$REPMGR_USER" -d "$REPMGR_DB" \
+              --config-files=postgresql.conf,pg_hba.conf,postgresql.auto.conf; then
+            log "Successfully rejoined cluster under new primary '$election_winner'."
+          else
+            log "CRITICAL: repmgr node rejoin command failed. Halting for safety."
+            sleep infinity
+          fi
         else
           log "pg_rewind failed. Falling back to full clone from winner '$election_winner'."
           clone_standby "$winner_hostport"
