@@ -3,6 +3,9 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# Add the node's own name to /etc/hosts to ensure repmgrd can connect to itself.
+echo "127.0.0.1 ${NODE_NAME}" >> /etc/hosts
+
 : "${PGDATA:=/var/lib/postgresql/data}"
 : "${REPMGR_DB:=repmgr}"
 : "${REPMGR_USER:=repmgr}"
@@ -401,10 +404,7 @@ max_standby_streaming_delay = 10s  # AGGRESSIVE: cancel conflicting queries afte
 
 # Background writer tuning for write-heavy workload
 bgwriter_delay = 50ms             # Wake up more frequently (down from 200ms)
-bgwriter_lru_maxpages = 200       # More aggressive background writes
-bgwriter_lru_multiplier = 4.0     # Anticipate more dirty buffers
-EOF
-}
+bgwriter_lru_max
 
 write_pg_hba() {
   cat > "$PGDATA/pg_hba.conf" <<EOF
@@ -939,7 +939,7 @@ AUTOCONF
       # Try rewind first
       if attempt_rewind "$existing_primary"; then
         log "Rejoining via repmgr node rejoin..."
-        if gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind \
+        if gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind --no-conninfo-check \
             -h "${primary_host}" -p "${primary_port}" -U "$REPMGR_USER" -d "$REPMGR_DB" \
             --config-files=postgresql.conf,pg_hba.conf,postgresql.auto.conf; then
           log "Successfully rejoined cluster as standby."
@@ -1113,7 +1113,7 @@ AUTOCONF
       gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
       
       if attempt_rewind "$target_hostport"; then
-        if gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind \
+        if gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind --no-conninfo-check \
             -h "$target_primary" -p 5432 -U "$REPMGR_USER" -d "$REPMGR_DB" \
             --config-files=postgresql.conf,pg_hba.conf,postgresql.auto.conf; then
           log "Successfully rejoined cluster under new primary '$target_primary'."
