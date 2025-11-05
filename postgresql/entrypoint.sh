@@ -262,6 +262,8 @@ elect_primary_by_timeline() {
     # Ensure local max_timeline is numeric for comparison
     if ! [[ "$max_timeline" =~ ^[0-9]+$ ]]; then max_timeline=0; fi
 
+    # Only update winner if remote has STRICTLY HIGHER timeline
+    # If timelines are equal, keep current winner (which starts as self/NODE_NAME)
     if [ "$remote_timeline" -gt "$max_timeline" ]; then
       log "New winner found: $host (timeline $remote_timeline > $max_timeline)" >&2
       max_timeline="$remote_timeline"
@@ -989,101 +991,150 @@ AUTOCONF
     election_winner=$(elect_primary_by_timeline)
     log "Election concluded. Winner by timeline: '$election_winner'. Last known primary: '$lk_primary'."
 
-    # The winning condition is strict: a node must BOTH be the last known primary
-    # AND have the highest timeline ID to be able to bootstrap itself.
-    if [ "$NODE_NAME" = "$lk_primary" ] && [ "$NODE_NAME" = "$election_winner" ]; then
-      log "This node WON the election and was the Last Known Primary. Bootstrapping as primary."
-      # Use --force because we are certain this is the most up-to-date node.
-      if gosu postgres repmgr -f "$REPMGR_CONF" primary register --force; then
+    # CRITICAL: Only the last-known-primary is allowed to bootstrap itself.
+    # All other nodes MUST wait for a primary to appear, avoiding split-brain.
+    if [ "$NODE_NAME" = "$lk_primary" ]; then
+      # This node was the last-known-primary. Check if we also won by timeline.
+      if [ "$NODE_NAME" = "$election_winner" ] || [ "$election_winner" = "$lk_primary" ]; then
+        log "This node IS the last-known-primary and has highest/equal timeline. Bootstrapping as primary."
+        if gosu postgres repmgr -f "$REPMGR_CONF" primary register --force; then
           write_last_primary "$NODE_NAME"
           log "Successfully registered as primary after winning election."
-      else
-          log "CRITICAL: Won election but failed to register as primary. Check repmgr logs."
-          sleep infinity
-      fi
-    else
-      # This node lost the election or is not last-known-primary. It must follow the winner.
-      # Guard against the case where 'winner' == self but we're not allowed to promote (lk_primary mismatch).
-      if [ "$election_winner" = "$NODE_NAME" ]; then
-        peer_winner=$(elect_best_peer_by_timeline)
-        if [ -n "$peer_winner" ]; then
-          log "Election favors self but LKP mismatch; will follow best peer '$peer_winner' instead."
-          election_winner="$peer_winner"
         else
-          log "No viable peer found to follow; waiting for a primary to appear."
-        fi
-      fi
-
-      log "This node must follow the winner '$election_winner' (lk_primary='$lk_primary')."
-
-      if [ -z "$election_winner" ]; then
-          log "CRITICAL: Election resulted in no winner. Cluster is in an inconsistent state. Halting."
+          log "CRITICAL: Failed to register as primary. Check repmgr logs."
           sleep infinity
-      fi
-
-      winner_hostport="${election_winner}:5432"
-
-      # Stop local PG to prepare for rewind/clone only after we have a non-self winner
-      if [ "$election_winner" != "$NODE_NAME" ]; then
+        fi
+      else
+        # Timeline winner is someone else (shouldn't happen if data is consistent, but safety check)
+        log "WARNING: This node is LKP but timeline winner is '$election_winner'. Will follow winner."
+        winner_hostport="${election_winner}:5432"
         gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
-      fi
-
-      # Wait patiently for the winner to be promoted and become a primary.
-      log "Waiting for winner '$election_winner' to become primary..."
-      winner_is_primary=false
-      for i in $(seq 1 60); do # Wait up to 5 minutes
-          if wait_for_port "$election_winner" 5432 3 && is_primary "$election_winner" 5432; then
-              log "Winner '$election_winner' is now confirmed as primary."
-              winner_is_primary=true
-              break
-          fi
-          log "Still waiting for winner '$election_winner' to be promoted... (attempt $i/60)"
-          sleep 5
-      done
-
-      if [ "$winner_is_primary" = true ]; then
-        log "Proceeding to rejoin winner '$election_winner'."
-        if attempt_rewind "$winner_hostport"; then
-          if gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind \
-              -h "$election_winner" -p 5432 -U "$REPMGR_USER" -d "$REPMGR_DB" \
-              --config-files=postgresql.conf,pg_hba.conf,postgresql.auto.conf; then
-            log "Successfully rejoined cluster under new primary '$election_winner'."
-          else
-            log "Node rejoin failed; attempting metadata normalize then register."
-            gosu postgres repmgr -f "$REPMGR_CONF" \
-              -h "$election_winner" -p 5432 \
-              -U "$REPMGR_USER" -d "$REPMGR_DB" \
-              primary unregister --node-id="$NODE_ID" --force || true
-
-            # Ensure this node boots as a standby by writing recovery settings
-            touch "$PGDATA/standby.signal"
-            chown postgres:postgres "$PGDATA/standby.signal"
-            cat > "$PGDATA/postgresql.auto.conf" <<-AUTOCONF
+        
+        log "Waiting for timeline winner '$election_winner' to become primary..."
+        if wait_for_port "$election_winner" 5432 60 && is_primary "$election_winner" 5432; then
+          log "Timeline winner is now primary. Proceeding to rejoin."
+          if attempt_rewind "$winner_hostport"; then
+            log "Rejoining via repmgr node rejoin..."
+            if gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind \
+                -h "$election_winner" -p 5432 -U "$REPMGR_USER" -d "$REPMGR_DB" \
+                --config-files=postgresql.conf,pg_hba.conf,postgresql.auto.conf; then
+              log "Successfully rejoined cluster under timeline winner."
+            else
+              log "Rejoin failed. Falling back to register."
+              gosu postgres repmgr -f "$REPMGR_CONF" \
+                -h "$election_winner" -p 5432 \
+                -U "$REPMGR_USER" -d "$REPMGR_DB" \
+                primary unregister --node-id="$NODE_ID" --force || true
+              
+              touch "$PGDATA/standby.signal"
+              chown postgres:postgres "$PGDATA/standby.signal"
+              cat > "$PGDATA/postgresql.auto.conf" <<-AUTOCONF
 primary_conninfo = 'host=$election_winner port=5432 user=$REPMGR_USER dbname=$REPMGR_DB password=$REPMGR_PASSWORD application_name=$NODE_NAME'
 primary_slot_name = 'repmgr_slot_${NODE_ID}'
 AUTOCONF
-            chown postgres:postgres "$PGDATA/postgresql.auto.conf"
-
-            # Start PostgreSQL now that recovery settings are in place
-            gosu postgres pg_ctl -D "$PGDATA" -w start || true
-
-            if gosu postgres repmgr \
+              chown postgres:postgres "$PGDATA/postgresql.auto.conf"
+              gosu postgres pg_ctl -D "$PGDATA" -w start || true
+              
+              gosu postgres repmgr \
                 -h "$election_winner" -p 5432 \
                 -U "$REPMGR_USER" -d "$REPMGR_DB" -f "$REPMGR_CONF" \
-                standby register --force; then
-              log "Node registered as standby (fallback)."
-            else
-              log "Standby register failed; falling back to full clone from winner."
-              clone_standby "$winner_hostport"
+                standby register --force || clone_standby "$winner_hostport"
             fi
+          else
+            clone_standby "$winner_hostport"
           fi
         else
-          log "pg_rewind failed. Falling back to full clone from winner '$election_winner'."
-          clone_standby "$winner_hostport"
+          log "CRITICAL: Timeline winner did not become primary. Halting."
+          sleep infinity
+        fi
+      fi
+    else
+      # This node is NOT the last-known-primary.
+      # It MUST wait for the LKP (or timeline winner) to become primary.
+      log "This node is NOT the last-known-primary. Must wait for primary to appear."
+      
+      # Prefer waiting for the last-known-primary specifically
+      target_primary=""
+      if [ -n "$lk_primary" ]; then
+        log "Waiting for last-known-primary '$lk_primary' to become active..."
+        for i in $(seq 1 60); do
+          if wait_for_port "$lk_primary" 5432 3 && is_primary "$lk_primary" 5432; then
+            target_primary="$lk_primary"
+            log "Last-known-primary '$lk_primary' is now primary."
+            break
+          fi
+          log "Still waiting for LKP '$lk_primary'... (attempt $i/60)"
+          sleep 5
+        done
+      fi
+      
+      # If LKP didn't come up, wait for any primary (including timeline winner)
+      if [ -z "$target_primary" ]; then
+        log "LKP not available. Waiting for any primary (including timeline winner '$election_winner')..."
+        for i in $(seq 1 60); do
+          if [ "$election_winner" != "$NODE_NAME" ] && wait_for_port "$election_winner" 5432 3 && is_primary "$election_winner" 5432; then
+            target_primary="$election_winner"
+            log "Timeline winner '$election_winner' is now primary."
+            break
+          fi
+          # Also check other peers
+          current_primary=$(find_new_primary || true)
+          if [ -n "$current_primary" ]; then
+            target_primary="${current_primary%:*}"
+            log "Found primary: $target_primary"
+            break
+          fi
+          log "Still waiting for any primary... (attempt $i/60)"
+          sleep 5
+        done
+      fi
+      
+      if [ -z "$target_primary" ]; then
+        log "CRITICAL: No primary appeared after extended wait. Halting to prevent split-brain."
+        sleep infinity
+      fi
+      
+      # Now rejoin the discovered primary
+      log "Proceeding to rejoin primary '$target_primary'."
+      target_hostport="${target_primary}:5432"
+      
+      # Stop local PG if running
+      gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
+      
+      if attempt_rewind "$target_hostport"; then
+        if gosu postgres repmgr -f "$REPMGR_CONF" node rejoin --force --force-rewind \
+            -h "$target_primary" -p 5432 -U "$REPMGR_USER" -d "$REPMGR_DB" \
+            --config-files=postgresql.conf,pg_hba.conf,postgresql.auto.conf; then
+          log "Successfully rejoined cluster under new primary '$target_primary'."
+        else
+          log "Node rejoin failed; attempting metadata normalize then register."
+          gosu postgres repmgr -f "$REPMGR_CONF" \
+            -h "$target_primary" -p 5432 \
+            -U "$REPMGR_USER" -d "$REPMGR_DB" \
+            primary unregister --node-id="$NODE_ID" --force || true
+
+          touch "$PGDATA/standby.signal"
+          chown postgres:postgres "$PGDATA/standby.signal"
+          cat > "$PGDATA/postgresql.auto.conf" <<-AUTOCONF
+primary_conninfo = 'host=$target_primary port=5432 user=$REPMGR_USER dbname=$REPMGR_DB password=$REPMGR_PASSWORD application_name=$NODE_NAME'
+primary_slot_name = 'repmgr_slot_${NODE_ID}'
+AUTOCONF
+          chown postgres:postgres "$PGDATA/postgresql.auto.conf"
+          gosu postgres pg_ctl -D "$PGDATA" -w start || true
+
+          if gosu postgres repmgr \
+              -h "$target_primary" -p 5432 \
+              -U "$REPMGR_USER" -d "$REPMGR_DB" -f "$REPMGR_CONF" \
+              standby register --force; then
+            log "Node registered as standby (fallback)."
+          else
+            log "Standby register failed; falling back to full clone."
+            clone_standby "$target_hostport"
+          fi
         fi
       else
-        log "CRITICAL: Winner '$election_winner' did not become primary after extended wait. Cluster is in an inconsistent state. Halting."
-        sleep infinity
+        log "pg_rewind failed. Falling back to full clone from primary '$target_primary'."
+        clone_standby "$target_hostport"
       fi
     fi
   fi
