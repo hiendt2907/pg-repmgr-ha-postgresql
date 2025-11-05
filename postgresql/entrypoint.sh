@@ -944,23 +944,33 @@ AUTOCONF
           log "Successfully rejoined cluster as standby."
         else
           log "Node rejoin failed; attempting metadata normalize then register."
+          # Stop the server that repmgr failed to start
+          gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
+
           gosu postgres repmgr -f "$REPMGR_CONF" \
             -h "$primary_host" -p "$primary_port" \
             -U "$REPMGR_USER" -d "$REPMGR_DB" \
             primary unregister --node-id="$NODE_ID" --force || true
 
-          # Ensure this node boots as a standby by writing recovery settings
+          # CRITICAL FIX: Create standby signal BEFORE starting the server
+          log "Creating standby.signal to force recovery mode..."
           touch "$PGDATA/standby.signal"
           chown postgres:postgres "$PGDATA/standby.signal"
+          
+          # Also write postgresql.auto.conf to ensure it follows the correct primary
+          log "Writing postgresql.auto.conf for recovery..."
           cat > "$PGDATA/postgresql.auto.conf" <<-AUTOCONF
+# Auto-generated for fallback rejoin
 primary_conninfo = 'host=$primary_host port=$primary_port user=$REPMGR_USER dbname=$REPMGR_DB password=$REPMGR_PASSWORD application_name=$NODE_NAME'
 primary_slot_name = 'repmgr_slot_${NODE_ID}'
 AUTOCONF
           chown postgres:postgres "$PGDATA/postgresql.auto.conf"
 
           # Start PostgreSQL now that recovery settings are in place
-          gosu postgres pg_ctl -D "$PGDATA" -w start || true
+          log "Starting PostgreSQL in standby mode (fallback)..."
+          gosu postgres pg_ctl -D "$PGDATA" -w start
 
+          log "Registering standby via repmgr (fallback)..."
           if gosu postgres repmgr \
               -h "$primary_host" -p "$primary_port" \
               -U "$REPMGR_USER" -d "$REPMGR_DB" -f "$REPMGR_CONF" \
@@ -1108,20 +1118,33 @@ AUTOCONF
           log "Successfully rejoined cluster under new primary '$target_primary'."
         else
           log "Node rejoin failed; attempting metadata normalize then register."
+          # Stop the server that repmgr failed to start
+          gosu postgres pg_ctl -D "$PGDATA" -m fast stop || true
+
           gosu postgres repmgr -f "$REPMGR_CONF" \
             -h "$target_primary" -p 5432 \
             -U "$REPMGR_USER" -d "$REPMGR_DB" \
             primary unregister --node-id="$NODE_ID" --force || true
 
+          # CRITICAL FIX: Create standby signal BEFORE starting the server
+          log "Creating standby.signal to force recovery mode..."
           touch "$PGDATA/standby.signal"
           chown postgres:postgres "$PGDATA/standby.signal"
+          
+          # Also write postgresql.auto.conf to ensure it follows the correct primary
+          log "Writing postgresql.auto.conf for recovery..."
           cat > "$PGDATA/postgresql.auto.conf" <<-AUTOCONF
+# Auto-generated for fallback rejoin
 primary_conninfo = 'host=$target_primary port=5432 user=$REPMGR_USER dbname=$REPMGR_DB password=$REPMGR_PASSWORD application_name=$NODE_NAME'
 primary_slot_name = 'repmgr_slot_${NODE_ID}'
 AUTOCONF
           chown postgres:postgres "$PGDATA/postgresql.auto.conf"
-          gosu postgres pg_ctl -D "$PGDATA" -w start || true
 
+          # Start PostgreSQL now that recovery settings are in place
+          log "Starting PostgreSQL in standby mode (fallback)..."
+          gosu postgres pg_ctl -D "$PGDATA" -w start
+
+          log "Registering standby via repmgr (fallback)..."
           if gosu postgres repmgr \
               -h "$target_primary" -p 5432 \
               -U "$REPMGR_USER" -d "$REPMGR_DB" -f "$REPMGR_CONF" \
